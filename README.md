@@ -64,7 +64,21 @@ To set up the project, follow these steps:
 
 ## Usage
 
-TODO: Add instructions on how to run the data processing and machine learning scripts. We will definitely have a local instruction + a Docker instruction.
+Local execution:
+
+```bash
+uv run -m src.main
+```
+
+Via Docker:
+
+```bash
+# Build the Docker image
+docker build -t yelp-spark-project .
+
+# Execute
+docker run -v $(pwd)/artifacts:/app/artifacts yelp-spark-project
+```
 
 ## License
 
