@@ -4,5 +4,59 @@ version = "0.1.0"
 description = "Big data processing with Spark for Yelp dataset"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "black[jupyter]>=26.1.0",
+    "flake8>=7.3.0",
+    "pre-commit>=4.5.1",
+    "pyright>=1.1.408",
+]
 license = { file = "UNLICENSE" }
+
+[tool.pyright]
+include = ["**.py"]
+exclude = [
+    # Default excludes from pyright
+    "**/.*",                # hidden files/folders
+    "**/.git/**",
+    ".git",
+
+    # Plus some additional ones
+    "**/site-packages/**",
+    "**/.venv/**",
+    "**/node_modules/**",
+    "**/__pycache__/**", 
+]
+reportMissingImports = false
+
+[tool.black]
+line-length = 80
+target-version = ['py312']
+include = '\.pyi?$'
+exclude = '''
+/(\.
+    | \.venv
+    | build
+    | dist
+    | .eggs
+    | \.git
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 80
+known_first_party = ["yelp-spark-project"]
+
+[tool.flake8]
+max-line-length = 80
+extend-ignore = [
+    "E203",  # whitespace before ':', conflicts with black
+    "W503",  # line break before binary operator, conflicts with black
+    "D107",  # missing docstring in __init__
+    "D202",  # No blank lines allowed after function docstring
+    "D401",  # First word of the docstring should be properly capitalized
+    "B008",  # Do not perform function calls in argument defaults
+]
