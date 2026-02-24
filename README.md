@@ -24,7 +24,18 @@ The project is organized into the following directories:
 
 ## Responsibilities
 
-TBA
+1. Oleksii Horyshevskyi:
+    - Setting up the project structure and environment
+    - Dataset downloading & unpacking automation
+
+2. Danylo Shliakhetko:
+    TBD
+
+3. Illia Matsko:
+    TBD
+
+4. Solomiia Trush:
+    TBD
 
 ## Requirements
 
@@ -46,7 +57,6 @@ To set up the project, follow these steps:
 
     ```bash
     pip install uv
-    uv sync
     ```
 
 3. Set up a virtual environment and activate it:
@@ -56,7 +66,13 @@ To set up the project, follow these steps:
     source .venv/bin/activate # On Windows, use .venv\Scripts\activate
     ```
 
-4. Download the Yelp dataset from the [Yelp Dataset Challenge](https://www.yelp.com/dataset) website and place the files in the `artifacts/` directory.
+4. Install the project dependencies:
+
+    ```bash
+    uv sync
+    ```
+
+5. Download the Yelp dataset from the [Yelp Dataset Challenge](https://www.yelp.com/dataset) website and place the files in the `artifacts/` directory.
 
     ```bash
     uv run -m src.artifacts.download
