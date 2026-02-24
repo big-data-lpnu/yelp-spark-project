@@ -23,5 +23,4 @@ wheels/
 *.whl
 
 # Download artifacts
-artifacts/
-!src/artifacts/
+/artifacts/
