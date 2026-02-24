@@ -4,6 +4,7 @@ from src.constants import (
     DATASETS_DIR,
     LOGGING_LEVEL,
 )
+from src.utils.logging import TqdmLoggingHandler
 from src.utils.network import stream_download
 from src.utils.archive_files import (
     is_supported_archive,
@@ -11,10 +12,13 @@ from src.utils.archive_files import (
     recursive_unpack,
 )
 
+from tqdm import tqdm
+
 import os
 import shutil
 import logging
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 
 def download_dataset(
@@ -23,6 +27,7 @@ def download_dataset(
     truncate_existing: bool = False,
     cleanup_archive: bool = True,
     chunk_size_bytes: int = 10 * 1024 * 1024,
+    tqdm_position: int = 0,
 ) -> None:
     """
     Download a dataset from the specified URL and save it to the given output path.
@@ -40,6 +45,9 @@ def download_dataset(
 
     :param chunk_size_bytes: The size of each chunk
     to download in bytes. Defaults to 10 MB.
+
+    :param tqdm_position: The position of the tqdm progress bar 
+    (useful for multiple downloads). Defaults to 0.
     """
     logger = logging.getLogger("ArtifactsDownloader")
     logger.debug(f"Downloading dataset from {url} to {output_path}...")
@@ -57,7 +65,13 @@ def download_dataset(
         )
         return
 
-    stream_download(url, output_path, chunk_size_bytes=chunk_size_bytes)
+    stream_download(
+        url, 
+        output_path, 
+        chunk_size_bytes=chunk_size_bytes,
+        tqdm_position=tqdm_position,
+    )
+
     if is_supported_archive(output_path):
         unpack_file(output_path, cleanup_archive=cleanup_archive)
 
@@ -67,29 +81,47 @@ def download_dataset(
         )
 
         logger.info(
-            f"Dataset downloaded and unpacked successfully.\n"
-            f"Unpacked paths:\n{output_path}\n"
-            f"{'\n'.join(unpacked_paths)}"
+            f"Dataset downloaded and unpacked successfully. "
+            f"Unpacked paths: {unpacked_paths}"
         )
 
     logger.debug(f"Dataset downloaded successfully and saved to {output_path}")
 
 
+downloads = [
+    (YELP_DATASET_JSON_URL, f"{DATASETS_DIR}/yelp_json.zip"),
+    (YELP_DATASET_PHOTOS_URL, f"{DATASETS_DIR}/yelp_photos.zip"),
+]
+
+
 if __name__ == "__main__":
+    handler = TqdmLoggingHandler()
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    ))
+
     logging.basicConfig(
         level=LOGGING_LEVEL,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[handler],
     )
     logger = logging.getLogger("ArtifactsDownloader")
+
+    # Configure urllib3 logging to use the same handler and prevent propagation
+    logging.getLogger("urllib3").handlers = [handler]
+    logging.getLogger("urllib3").propagate = False
 
     start_time = datetime.now()
     logger.info(f"Starting dataset download at {start_time}...")
 
     try:
-        download_dataset(YELP_DATASET_JSON_URL, f"{DATASETS_DIR}/yelp_json.zip")
-        download_dataset(
-            YELP_DATASET_PHOTOS_URL, f"{DATASETS_DIR}/yelp_photos.zip"
-        )
+        with ThreadPoolExecutor(max_workers=len(downloads)) as executor:
+            futures = [
+                executor.submit(download_dataset, url, output_path, tqdm_position=i)
+                for i, (url, output_path) in enumerate(downloads)
+            ]
+            for future in futures:
+                future.result()
+
         logger.info(
             f"All datasets downloaded successfully at {datetime.now()}.\n"
             f"Time elapsed: {datetime.now() - start_time}"
