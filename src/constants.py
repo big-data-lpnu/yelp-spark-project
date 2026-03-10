@@ -2,10 +2,12 @@
 # Please maintain this file as the source of truth for all constants used in the project.
 
 from logging import DEBUG as DEBUG_LOGGING_LEVEL
+from pathlib import Path
 
 # Artifacts
-ARTIFACTS_DIR = "artifacts"
-DATASETS_DIR = f"{ARTIFACTS_DIR}/datasets"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
+DATASETS_DIR = ARTIFACTS_DIR / "datasets" / "yelp_json" / "Yelp JSON" / "yelp_dataset"
 
 # Dataset URLs (at the time of writing, these were the URLs for the Yelp dataset page)
 # If these URLs change, please update them here.
@@ -19,3 +21,11 @@ YELP_DATASET_PHOTOS_URL = (
 
 # Logging configuration
 LOGGING_LEVEL = DEBUG_LOGGING_LEVEL
+
+# Dataset paths
+BUSINESS_PATH = DATASETS_DIR / "yelp_academic_dataset_business.json"
+REVIEW_PATH = DATASETS_DIR / "yelp_academic_dataset_review.json"
+USER_PATH = DATASETS_DIR / "yelp_academic_dataset_user.json"
+CHECKIN_PATH = DATASETS_DIR / "yelp_academic_dataset_checkin.json"
+TIP_PATH = DATASETS_DIR / "yelp_academic_dataset_tip.json"
+PHOTO_PATH = DATASETS_DIR / "yelp_academic_dataset_photo.json"
