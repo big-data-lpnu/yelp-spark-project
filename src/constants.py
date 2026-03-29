@@ -7,6 +7,7 @@ from pathlib import Path
 # Artifacts
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
+PROCESSED_DIR = ARTIFACTS_DIR / "processed"
 DATASETS_DIR = ARTIFACTS_DIR / "datasets" / "yelp_json" / "Yelp JSON" / "yelp_dataset"
 
 # Dataset URLs (at the time of writing, these were the URLs for the Yelp dataset page)
@@ -28,4 +29,12 @@ REVIEW_PATH = DATASETS_DIR / "yelp_academic_dataset_review.json"
 USER_PATH = DATASETS_DIR / "yelp_academic_dataset_user.json"
 CHECKIN_PATH = DATASETS_DIR / "yelp_academic_dataset_checkin.json"
 TIP_PATH = DATASETS_DIR / "yelp_academic_dataset_tip.json"
-PHOTO_PATH = DATASETS_DIR / "yelp_academic_dataset_photo.json"
+# Photo metadata is not in Yelp-JSON.zip; it lives in Yelp-Photos.zip as photos.json.
+PHOTO_PATH = (
+    ARTIFACTS_DIR
+    / "datasets"
+    / "yelp_photos"
+    / "Yelp Photos"
+    / "yelp_photos"
+    / "photos.json"
+)
