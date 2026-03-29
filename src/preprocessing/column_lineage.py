@@ -17,6 +17,9 @@ class TableLineage:
     flatten_added_columns: list[str]
     pruned_columns: list[str]
     column_count_after_prune: int
+    dropped_uninformative_columns: list[str]
+    column_count_after_screen: int
+    dropped_after_transform: list[str]
     column_count_final: int
 
 
@@ -26,6 +29,7 @@ def build_table_lineage(
     cols_after_prune: list[str],
     cols_final: list[str],
     cfg: PreprocessConfig,
+    dropped_uninformative: list[str] | None = None,
 ) -> TableLineage:
     """Derive flatten adds and actual pruned column names from column lists at each stage."""
     flat_set = set(cols_flat)
@@ -34,12 +38,19 @@ def build_table_lineage(
     flatten_added = sorted(flat_set - clean_set)
     requested = cfg.columns_to_prune_after_flatten
     pruned = sorted(c for c in requested if c in flat_set and c not in after_prune_set)
+    du = sorted(dropped_uninformative) if dropped_uninformative else []
+    du_set = set(du)
+    cols_after_screen = [c for c in cols_after_prune if c not in du_set]
+    dropped_after_transform = sorted(set(cols_after_screen) - set(cols_final))
     return TableLineage(
         column_count_after_clean=len(cols_clean),
         column_count_after_flatten=len(cols_flat),
         flatten_added_columns=flatten_added,
         pruned_columns=pruned,
         column_count_after_prune=len(cols_after_prune),
+        dropped_uninformative_columns=du,
+        column_count_after_screen=len(cols_after_screen),
+        dropped_after_transform=dropped_after_transform,
         column_count_final=len(cols_final),
     )
 
@@ -50,8 +61,10 @@ def build_lineage_all(
     pruned: dict[str, list[str]],
     final: dict[str, list[str]],
     config_per_table: dict[str, PreprocessConfig],
+    dropped_uninformative: dict[str, list[str]] | None = None,
 ) -> dict[str, TableLineage]:
-    """Build lineage for every table present in all four stage snapshots."""
+    """Build lineage for every table present in all stage snapshots."""
+    du_all = dropped_uninformative or {}
     out: dict[str, TableLineage] = {}
     for name in cleaned:
         if name not in flattened or name not in pruned or name not in final:
@@ -63,6 +76,7 @@ def build_lineage_all(
             pruned[name],
             final[name],
             cfg,
+            dropped_uninformative=du_all.get(name, []),
         )
     return out
 

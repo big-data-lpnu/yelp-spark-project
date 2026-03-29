@@ -17,6 +17,9 @@ class PreprocessConfig:
     # Columns to drop in transform after parse_dates (e.g. raw date string once parsed).
     columns_to_drop: list[str] = field(default_factory=list)
 
+    # After prune: drop columns with COUNT(DISTINCT) <= 1 (all null or constant).
+    drop_uninformative: bool = True
+
     # Transformation
     scale_method: str = "minmax"  # "minmax" | "standard" | "none"
     parse_dates: bool = True

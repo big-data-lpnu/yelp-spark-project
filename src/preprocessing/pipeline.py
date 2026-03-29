@@ -13,6 +13,10 @@ from src.preprocessing.clean import clean
 from src.preprocessing.config import PreprocessConfig, default_config
 from src.preprocessing.flatten import flatten_table
 from src.preprocessing.reduce import reduce_df
+from src.preprocessing.informativeness import (
+    drop_uninformative,
+    find_uninformative_columns,
+)
 from src.preprocessing.transform import prune_after_flatten, transform
 
 # Heartbeat interval (seconds) for progress during long steps
@@ -48,6 +52,13 @@ def _run_with_heartbeat(step_name: str, fn, *args, **kwargs):
         _current_step = None
 
 
+def _apply_uninformative_screen(df: DataFrame, cfg: PreprocessConfig) -> DataFrame:
+    if not cfg.drop_uninformative:
+        return df
+    to_drop = find_uninformative_columns(df)
+    return drop_uninformative(df, to_drop) if to_drop else df
+
+
 def preprocess_business(
     spark: SparkSession,
     raw_df: DataFrame,
@@ -58,6 +69,7 @@ def preprocess_business(
     df = clean(raw_df, "business", cfg)
     df = flatten_table(df, "business")
     df = prune_after_flatten(df, cfg, "business")
+    df = _apply_uninformative_screen(df, cfg)
     df = transform(df, cfg, "business")
     return reduce_df(df, cfg)
 
@@ -72,6 +84,7 @@ def preprocess_review(
     df = clean(raw_df, "review", cfg)
     df = flatten_table(df, "review")
     df = prune_after_flatten(df, cfg, "review")
+    df = _apply_uninformative_screen(df, cfg)
     df = transform(df, cfg, "review")
     return reduce_df(df, cfg)
 
@@ -86,6 +99,7 @@ def preprocess_user(
     df = clean(raw_df, "user", cfg)
     df = flatten_table(df, "user")
     df = prune_after_flatten(df, cfg, "user")
+    df = _apply_uninformative_screen(df, cfg)
     df = transform(df, cfg, "user")
     return reduce_df(df, cfg)
 
@@ -100,6 +114,7 @@ def preprocess_checkin(
     df = clean(raw_df, "checkin", cfg)
     df = flatten_table(df, "checkin")
     df = prune_after_flatten(df, cfg, "checkin")
+    df = _apply_uninformative_screen(df, cfg)
     df = transform(df, cfg, "checkin")
     return reduce_df(df, cfg)
 
@@ -114,6 +129,7 @@ def preprocess_tip(
     df = clean(raw_df, "tip", cfg)
     df = flatten_table(df, "tip")
     df = prune_after_flatten(df, cfg, "tip")
+    df = _apply_uninformative_screen(df, cfg)
     df = transform(df, cfg, "tip")
     return reduce_df(df, cfg)
 
@@ -128,6 +144,7 @@ def preprocess_photo(
     df = clean(raw_df, "photo", cfg)
     df = flatten_table(df, "photo")
     df = prune_after_flatten(df, cfg, "photo")
+    df = _apply_uninformative_screen(df, cfg)
     df = transform(df, cfg, "photo")
     return reduce_df(df, cfg)
 
@@ -255,14 +272,54 @@ def prune_all(
     return result
 
 
-def transform_all(
+def screen_uninformative_all(
     spark: SparkSession,
     pruned: dict[str, DataFrame],
+    config_per_table: dict[str, PreprocessConfig] | None = None,
+) -> tuple[dict[str, DataFrame], dict[str, list[str]]]:
+    """
+    Between prune and transform: drop constant / all-null columns (unless disabled in config).
+    Returns (screened_dfs, dropped_columns_per_table).
+    """
+    configs = config_per_table or default_config()
+    names = list(pruned)
+    _log(f"Stage 4b: Uninformative screen ({len(names)} datasets)")
+    result: dict[str, DataFrame] = {}
+    dropped: dict[str, list[str]] = {}
+    for i, name in enumerate(names, 1):
+        t0 = time.perf_counter()
+        cfg = configs.get(name) or default_config().get(name) or PreprocessConfig()
+        _log(f"  [{i}/{len(names)}] {name}: screening...")
+
+        def _screen():
+            df = pruned[name]
+            if not cfg.drop_uninformative:
+                return df, []
+            cols = find_uninformative_columns(df)
+            if not cols:
+                return df, []
+            return drop_uninformative(df, cols), cols
+
+        df, cols = _run_with_heartbeat(f"screen {name}", _screen)
+        n = df.count()
+        elapsed = time.perf_counter() - t0
+        dropped[name] = cols
+        _log(
+            f"  [{i}/{len(names)}] {name}: done ({n} rows, {len(cols)} dropped, {elapsed:.1f}s)"
+        )
+        result[name] = df
+    _log("Stage 4b: finished.")
+    return result, dropped
+
+
+def transform_all(
+    spark: SparkSession,
+    pruned_or_screened: dict[str, DataFrame],
     config_per_table: dict[str, PreprocessConfig] | None = None,
 ) -> dict[str, DataFrame]:
     """Stage 5: Transform (scale, parse dates, drop cols) for each dataset. Logs progress."""
     configs = config_per_table or default_config()
-    names = list(pruned)
+    names = list(pruned_or_screened)
     _log(f"Stage 5: Transforming ({len(names)} datasets)")
     result = {}
     for i, name in enumerate(names, 1):
@@ -271,7 +328,7 @@ def transform_all(
 
         def _transform():
             cfg = configs.get(name) or default_config().get(name) or PreprocessConfig()
-            return transform(pruned[name], cfg, name)
+            return transform(pruned_or_screened[name], cfg, name)
 
         df = _run_with_heartbeat(f"transform {name}", _transform)
         n = df.count()

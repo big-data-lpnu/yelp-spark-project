@@ -13,6 +13,7 @@ from src.preprocessing.pipeline import (
     preprocess_user,
     prune_all,
     reduce_all,
+    screen_uninformative_all,
     transform_all,
     write_processed,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "preprocess_user",
     "prune_all",
     "reduce_all",
+    "screen_uninformative_all",
     "transform_all",
     "write_processed",
 ]
