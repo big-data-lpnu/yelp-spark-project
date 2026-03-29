@@ -138,6 +138,17 @@ def drop_columns(df: DataFrame, to_drop: list[str]) -> DataFrame:
     return df
 
 
+def prune_after_flatten(
+    df: DataFrame,
+    config: PreprocessConfig,
+    _table: str,
+) -> DataFrame:
+    """Drop redundant nested/array columns once flatten-derived fields exist."""
+    if not config.columns_to_prune_after_flatten:
+        return df
+    return drop_columns(df, config.columns_to_prune_after_flatten)
+
+
 def transform(
     df: DataFrame,
     config: PreprocessConfig,

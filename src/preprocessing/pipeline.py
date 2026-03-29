@@ -1,4 +1,4 @@
-"""Orchestrate preprocessing: clean -> flatten -> transform -> reduce per table."""
+"""Orchestrate preprocessing: clean -> flatten -> prune -> transform -> reduce per table."""
 
 import os
 import threading
@@ -13,7 +13,7 @@ from src.preprocessing.clean import clean
 from src.preprocessing.config import PreprocessConfig, default_config
 from src.preprocessing.flatten import flatten_table
 from src.preprocessing.reduce import reduce_df
-from src.preprocessing.transform import transform
+from src.preprocessing.transform import prune_after_flatten, transform
 
 # Heartbeat interval (seconds) for progress during long steps
 _HEARTBEAT_INTERVAL = 60
@@ -57,6 +57,7 @@ def preprocess_business(
     cfg = config or default_config()["business"]
     df = clean(raw_df, "business", cfg)
     df = flatten_table(df, "business")
+    df = prune_after_flatten(df, cfg, "business")
     df = transform(df, cfg, "business")
     return reduce_df(df, cfg)
 
@@ -70,6 +71,7 @@ def preprocess_review(
     cfg = config or default_config()["review"]
     df = clean(raw_df, "review", cfg)
     df = flatten_table(df, "review")
+    df = prune_after_flatten(df, cfg, "review")
     df = transform(df, cfg, "review")
     return reduce_df(df, cfg)
 
@@ -83,6 +85,7 @@ def preprocess_user(
     cfg = config or default_config()["user"]
     df = clean(raw_df, "user", cfg)
     df = flatten_table(df, "user")
+    df = prune_after_flatten(df, cfg, "user")
     df = transform(df, cfg, "user")
     return reduce_df(df, cfg)
 
@@ -96,6 +99,7 @@ def preprocess_checkin(
     cfg = config or default_config()["checkin"]
     df = clean(raw_df, "checkin", cfg)
     df = flatten_table(df, "checkin")
+    df = prune_after_flatten(df, cfg, "checkin")
     df = transform(df, cfg, "checkin")
     return reduce_df(df, cfg)
 
@@ -109,6 +113,7 @@ def preprocess_tip(
     cfg = config or default_config()["tip"]
     df = clean(raw_df, "tip", cfg)
     df = flatten_table(df, "tip")
+    df = prune_after_flatten(df, cfg, "tip")
     df = transform(df, cfg, "tip")
     return reduce_df(df, cfg)
 
@@ -122,6 +127,7 @@ def preprocess_photo(
     cfg = config or default_config()["photo"]
     df = clean(raw_df, "photo", cfg)
     df = flatten_table(df, "photo")
+    df = prune_after_flatten(df, cfg, "photo")
     df = transform(df, cfg, "photo")
     return reduce_df(df, cfg)
 
@@ -222,25 +228,25 @@ def flatten_all(
     return result
 
 
-def transform_all(
+def prune_all(
     spark: SparkSession,
     flattened: dict[str, DataFrame],
     config_per_table: dict[str, PreprocessConfig] | None = None,
 ) -> dict[str, DataFrame]:
-    """Stage 4: Transform (scale, parse dates, drop cols) for each dataset. Logs progress."""
+    """Stage 4: Drop redundant nested/array columns after flatten. Logs progress."""
     configs = config_per_table or default_config()
     names = list(flattened)
-    _log(f"Stage 4: Transforming ({len(names)} datasets)")
+    _log(f"Stage 4: Prune after flatten ({len(names)} datasets)")
     result = {}
     for i, name in enumerate(names, 1):
         t0 = time.perf_counter()
-        _log(f"  [{i}/{len(names)}] {name}: transforming...")
+        _log(f"  [{i}/{len(names)}] {name}: pruning...")
 
-        def _transform():
+        def _prune():
             cfg = configs.get(name) or default_config().get(name) or PreprocessConfig()
-            return transform(flattened[name], cfg, name)
+            return prune_after_flatten(flattened[name], cfg, name)
 
-        df = _run_with_heartbeat(f"transform {name}", _transform)
+        df = _run_with_heartbeat(f"prune {name}", _prune)
         n = df.count()
         elapsed = time.perf_counter() - t0
         _log(f"  [{i}/{len(names)}] {name}: done ({n} rows, {elapsed:.1f}s)")
@@ -249,15 +255,42 @@ def transform_all(
     return result
 
 
+def transform_all(
+    spark: SparkSession,
+    pruned: dict[str, DataFrame],
+    config_per_table: dict[str, PreprocessConfig] | None = None,
+) -> dict[str, DataFrame]:
+    """Stage 5: Transform (scale, parse dates, drop cols) for each dataset. Logs progress."""
+    configs = config_per_table or default_config()
+    names = list(pruned)
+    _log(f"Stage 5: Transforming ({len(names)} datasets)")
+    result = {}
+    for i, name in enumerate(names, 1):
+        t0 = time.perf_counter()
+        _log(f"  [{i}/{len(names)}] {name}: transforming...")
+
+        def _transform():
+            cfg = configs.get(name) or default_config().get(name) or PreprocessConfig()
+            return transform(pruned[name], cfg, name)
+
+        df = _run_with_heartbeat(f"transform {name}", _transform)
+        n = df.count()
+        elapsed = time.perf_counter() - t0
+        _log(f"  [{i}/{len(names)}] {name}: done ({n} rows, {elapsed:.1f}s)")
+        result[name] = df
+    _log("Stage 5: finished.")
+    return result
+
+
 def reduce_all(
     spark: SparkSession,
     transformed: dict[str, DataFrame],
     config_per_table: dict[str, PreprocessConfig] | None = None,
 ) -> dict[str, DataFrame]:
-    """Stage 5: Optional sampling/reduction for each dataset. Logs progress."""
+    """Stage 6: Optional sampling/reduction for each dataset. Logs progress."""
     configs = config_per_table or default_config()
     names = list(transformed)
-    _log(f"Stage 5: Reduce ({len(names)} datasets)")
+    _log(f"Stage 6: Reduce ({len(names)} datasets)")
     result = {}
     for i, name in enumerate(names, 1):
         t0 = time.perf_counter()
@@ -268,7 +301,7 @@ def reduce_all(
         elapsed = time.perf_counter() - t0
         _log(f"  [{i}/{len(names)}] {name}: done ({n} rows, {elapsed:.1f}s)")
         result[name] = df
-    _log("Stage 5: finished.")
+    _log("Stage 6: finished.")
     return result
 
 
@@ -333,7 +366,7 @@ def preprocess_all(
     Load each dataset, run its preprocessor, return dict of processed DataFrames.
     Logs progress per dataset and a heartbeat every minute during long steps.
     For more control and less memory use, run the staged pipeline instead:
-    load_all_raw -> clean_all -> flatten_all -> transform_all -> reduce_all.
+    load_all_raw -> clean_all -> flatten_all -> prune_all -> transform_all -> reduce_all.
     """
     if not load_raw:
         raise ValueError("preprocess_all with load_raw=False requires raw dict")
