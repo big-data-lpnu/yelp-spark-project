@@ -1,4 +1,4 @@
-"""Preprocessing pipeline for Yelp datasets: clean, flatten, transform, reduce."""
+"""Preprocessing pipeline for Yelp datasets: clean, flatten, prune, transform, reduce."""
 
 from src.preprocessing.pipeline import (
     clean_all,
@@ -11,6 +11,7 @@ from src.preprocessing.pipeline import (
     preprocess_review,
     preprocess_tip,
     preprocess_user,
+    prune_all,
     reduce_all,
     transform_all,
     write_processed,
@@ -27,6 +28,7 @@ __all__ = [
     "preprocess_review",
     "preprocess_tip",
     "preprocess_user",
+    "prune_all",
     "reduce_all",
     "transform_all",
     "write_processed",

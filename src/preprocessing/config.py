@@ -1,9 +1,6 @@
 """Configuration for preprocessing pipeline: null handling, scaling, reduction."""
 
 from dataclasses import dataclass, field
-from typing import Any
-
-
 @dataclass
 class PreprocessConfig:
     """Per-table or global preprocessing options."""
@@ -14,7 +11,10 @@ class PreprocessConfig:
     impute_categorical: str = "Unknown"
     drop_duplicates: bool = True
 
-    # Columns to drop after flattening or for ML (table-specific)
+    # Columns to drop immediately after flatten (redundant vs derived columns).
+    columns_to_prune_after_flatten: list[str] = field(default_factory=list)
+
+    # Columns to drop in transform after parse_dates (e.g. raw date string once parsed).
     columns_to_drop: list[str] = field(default_factory=list)
 
     # Transformation
@@ -33,21 +33,26 @@ class PreprocessConfig:
 
 
 def default_config() -> dict[str, PreprocessConfig]:
-    """Default config per dataset; columns_to_drop are minimal (redundant after flatten)."""
+    """Default config: prune drops redundant nested/arrays after flatten; columns_to_drop removes raw dates after parsing."""
     return {
         "business": PreprocessConfig(
-            columns_to_drop=["attributes", "hours"],  # flattened
+            columns_to_prune_after_flatten=["attributes", "hours", "categories"],
+            columns_to_drop=[],
         ),
         "review": PreprocessConfig(
-            columns_to_drop=["date"],  # raw string is yyyy-MM-dd HH:mm:ss; use date_parsed
+            columns_to_prune_after_flatten=[],
+            columns_to_drop=["date"],
         ),
         "user": PreprocessConfig(
-            columns_to_drop=["friends", "elite"],  # replaced by _count
+            columns_to_prune_after_flatten=["friends", "elite"],
+            columns_to_drop=[],
         ),
         "checkin": PreprocessConfig(
-            columns_to_drop=["date"],  # replaced by checkin_count etc.
+            columns_to_prune_after_flatten=[],
+            columns_to_drop=["date"],
         ),
         "tip": PreprocessConfig(
+            columns_to_prune_after_flatten=[],
             columns_to_drop=["date"],
         ),
         "photo": PreprocessConfig(),
