@@ -1,4 +1,4 @@
-ARG OPENJDK_VERSION=25
+ARG OPENJDK_VERSION=17
 ARG OPENJDK_FLAVOR=alpine
 ARG UV_PYTHON_INSTALL_DIR="/opt/uv-python"
 ARG UV_INSTALL_DIR="/usr/local/bin"
@@ -27,7 +27,7 @@ ARG UV_PYTHON_INSTALL_DIR
 ENV UV_INSTALL_DIR=${UV_INSTALL_DIR}
 ENV UV_PYTHON_INSTALL_DIR=${UV_PYTHON_INSTALL_DIR}
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates bash
 
 COPY --from=builder ${UV_INSTALL_DIR} ${UV_INSTALL_DIR}
 COPY --from=builder ${UV_PYTHON_INSTALL_DIR} ${UV_PYTHON_INSTALL_DIR}

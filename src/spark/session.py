@@ -1,12 +1,8 @@
-from __future__ import annotations
-
+from pyspark.sql import SparkSession
 import os
-import subprocess
-from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from pyspark.sql import SparkSession
+
+os.environ["JAVA_TOOL_OPTIONS"] = "-XX:-UseContainerSupport"
 
 from src.constants import PROJECT_ROOT
 
@@ -149,41 +145,14 @@ def create_spark_session(app_name: str = "yelp-spark-project") -> SparkSession:
         SparkSession: An initialized SparkSession with the specified
         configurations.
     """
-    _ensure_java_home_for_spark()
-    # Import after JAVA_HOME is set — PySpark may read the env at import time.
-    from pyspark.sql import SparkSession
 
-    cores, driver_mem, executor_mem, shuffle_parts = _spark_resource_settings()
-    master = f"local[{cores}]"
-
-    builder = (
+    spark = (
         SparkSession.builder.appName(app_name)
-        .master(master)
-        .config("spark.driver.memory", driver_mem)
-        .config("spark.executor.memory", executor_mem)
-        .config("spark.sql.shuffle.partitions", str(shuffle_parts))
-        .config("spark.default.parallelism", str(cores))
-        .config("spark.sql.files.maxPartitionBytes", "67108864")
-        .config("spark.driver.maxResultSize", "1g")
-        .config("spark.memory.storageFraction", "0.3")
-        .config("spark.sql.adaptive.enabled", "true")
-        .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
-        .config("spark.driver.extraJavaOptions", _SPARK_EXTRA_JAVA_OPTS)
-        .config("spark.executor.extraJavaOptions", _SPARK_EXTRA_JAVA_OPTS)
-        .config("spark.local.dir", _resolve_spark_local_dir())
+        .master("local[4]")
+        .config("spark.driver.memory", "2g")
+        .config("spark.executor.memory", "2g")
+        .config("spark.sql.shuffle.partitions", "8")
+        .getOrCreate()
     )
-
-    # Local mode: bind driver to loopback so block/shuffle traffic does not use the
-    # machine hostname (e.g. Docker/LAN mismatches → TaskResultLost, idle timeouts).
-    # Override with SPARK_DRIVER_BIND_ADDRESS / SPARK_DRIVER_HOST (empty = skip).
-    if master.startswith("local"):
-        bind = os.environ.get("SPARK_DRIVER_BIND_ADDRESS", "127.0.0.1").strip()
-        host = os.environ.get("SPARK_DRIVER_HOST", "127.0.0.1").strip()
-        if bind:
-            builder = builder.config("spark.driver.bindAddress", bind)
-        if host:
-            builder = builder.config("spark.driver.host", host)
-
-    spark = builder.getOrCreate()
 
     return spark

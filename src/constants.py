@@ -1,4 +1,4 @@
-# Created at Sunday, 2026-02-22 18:11
+# Created on Sunday, 2026-02-22 18:11
 # Please maintain this file as the source of truth for all constants used in the project.
 
 from logging import DEBUG as DEBUG_LOGGING_LEVEL
