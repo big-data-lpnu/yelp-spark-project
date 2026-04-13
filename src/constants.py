@@ -20,6 +20,9 @@ YELP_DATASET_PHOTOS_URL = (
     "https://business.yelp.com/external-assets/files/Yelp-Photos.zip"
 )
 
+# Results output directory (add /results/ to .gitignore)
+RESULTS_DIR = PROJECT_ROOT / "results"
+
 # Logging configuration
 LOGGING_LEVEL = DEBUG_LOGGING_LEVEL
 
