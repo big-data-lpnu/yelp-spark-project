@@ -149,9 +149,21 @@ def create_spark_session(app_name: str = "yelp-spark-project") -> SparkSession:
     spark = (
         SparkSession.builder.appName(app_name)
         .master("local[4]")
-        .config("spark.driver.memory", "2g")
-        .config("spark.executor.memory", "2g")
-        .config("spark.sql.shuffle.partitions", "8")
+        # Give them enough heap space.
+        .config("spark.driver.memory", "8g")
+        .config("spark.executor.memory", "8g")
+        # Increase the fraction of heap used for execution/storage (default 0.6).
+        .config("spark.memory.fraction", "0.8")
+        # Of that fraction, reserve less for cached data so execution tasks have
+        # more room to work (default 0.5 — halved here to reduce spill pressure).
+        .config("spark.memory.storageFraction", "0.3")
+        # Limit the max size of a single collect result to avoid driver OOM.
+        .config("spark.driver.maxResultSize", "2g")
+        # More shuffle partitions spread the data more finely, keeping each
+        # partition smaller and less likely to exhaust per-task memory.
+        .config("spark.sql.shuffle.partitions", "200")
+        # Avoid broadcasting large tables; let Spark sort-merge join instead.
+        .config("spark.sql.autoBroadcastJoinThreshold", "-1")
         .getOrCreate()
     )
 
