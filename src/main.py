@@ -15,11 +15,20 @@ def main():
     )
 
     print("Java version:")
-    print(
-        subprocess.check_output(
-            ["java", "-version"], stderr=subprocess.STDOUT
-        ).decode()
-    )
+    try:
+        print(
+            subprocess.check_output(
+                ["java", "-version"], stderr=subprocess.STDOUT
+            ).decode()
+        )
+    except FileNotFoundError:
+        print(
+            "Java is not installed or not available on PATH; skipping Java version check."
+        )
+    except subprocess.CalledProcessError as e:
+        print(
+            f"Unable to determine Java version (command failed): {e.output.decode().strip()}"
+        )
 
     spark = create_spark_session()
 
