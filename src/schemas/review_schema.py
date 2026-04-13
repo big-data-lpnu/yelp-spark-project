@@ -2,7 +2,8 @@ from pyspark.sql.types import (
     StructType,
     StructField,
     StringType,
-    IntegerType
+    IntegerType,
+    DoubleType,
 )
 
 review_schema = StructType([
@@ -10,7 +11,9 @@ review_schema = StructType([
     StructField("user_id", StringType(), True),
     StructField("business_id", StringType(), True),
 
-    StructField("stars", IntegerType(), True),
+    # Yelp JSON stores stars as a float (e.g. 4.0) — DoubleType parses cleanly.
+    # IntegerType silently nullifies float-encoded integers during JSON read.
+    StructField("stars", DoubleType(), True),
     StructField("date", StringType(), True),
     StructField("text", StringType(), True),
 

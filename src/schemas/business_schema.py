@@ -5,7 +5,6 @@ from pyspark.sql.types import (
     DoubleType,
     IntegerType,
     MapType,
-    ArrayType
 )
 
 
@@ -26,7 +25,9 @@ business_schema = StructType([
 
     StructField("attributes", MapType(StringType(), StringType()), True),
 
-    StructField("categories", ArrayType(StringType()), True),
+    # Actual data stores categories as a comma-separated string,
+    # e.g. "Restaurants, Pizza, Italian". Filter with .contains("X").
+    StructField("categories", StringType(), True),
 
     StructField("hours", MapType(StringType(), StringType()), True)
 ])
