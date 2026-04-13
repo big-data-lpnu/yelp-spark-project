@@ -35,7 +35,7 @@ def main():
     # ------------------------------------------------------------------
     # Extraction phase - load and validate every dataset
     # ------------------------------------------------------------------
-    datasets = ["business", "review", "user", "checkin", "tip"]
+    datasets = ["business", "review", "user", "checkin", "tip", "photo"]
 
     validation_reports = {}
     for dataset_name in datasets:
