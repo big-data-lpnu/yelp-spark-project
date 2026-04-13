@@ -1,5 +1,5 @@
 """
-Transformation Phase — Main Orchestrator
+Transformation Phase - Main Orchestrator
 ==========================================
 Loads all datasets, runs the 24 business-question transformations across
 four team members, and writes results to CSV under /results/.
@@ -20,11 +20,11 @@ def run_transformations(spark) -> None:
     """Load datasets, run all questions, and save CSV results."""
     print("Loading datasets...")
     business = load_dataset(spark, "business").cache()
-    review   = load_dataset(spark, "review").cache()
-    user     = load_dataset(spark, "user").cache()
-    checkin  = load_dataset(spark, "checkin").cache()
-    tip      = load_dataset(spark, "tip").cache()
-    photo    = load_dataset(spark, "photo").cache()
+    review = load_dataset(spark, "review").cache()
+    user = load_dataset(spark, "user").cache()
+    checkin = load_dataset(spark, "checkin").cache()
+    tip = load_dataset(spark, "tip").cache()
+    photo = load_dataset(spark, "photo").cache()
     print("All datasets loaded and cached.\n")
 
     results_root = Path(RESULTS_DIR)
@@ -51,5 +51,5 @@ def run_transformations(spark) -> None:
     t4.run_all(business, checkin, tip, photo, results_root)
 
     print("\n" + "=" * 80)
-    print(f"TRANSFORMATION PHASE COMPLETE — results in: {results_root}")
+    print(f"TRANSFORMATION PHASE COMPLETE - results in: {results_root}")
     print("=" * 80)

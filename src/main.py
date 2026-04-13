@@ -15,12 +15,16 @@ def main():
     )
 
     print("Java version:")
-    print(subprocess.check_output(["java", "-version"], stderr=subprocess.STDOUT).decode())
+    print(
+        subprocess.check_output(
+            ["java", "-version"], stderr=subprocess.STDOUT
+        ).decode()
+    )
 
     spark = create_spark_session()
 
     # ------------------------------------------------------------------
-    # Extraction phase — load and validate every dataset
+    # Extraction phase - load and validate every dataset
     # ------------------------------------------------------------------
     datasets = ["business", "review", "user", "checkin", "tip"]
 
@@ -44,7 +48,9 @@ def main():
 
     successful = sum(1 for r in validation_reports.values() if "error" not in r)
     failed = len(validation_reports) - successful
-    print(f"Successfully loaded and validated: {successful}/{len(datasets)} datasets")
+    print(
+        f"Successfully loaded and validated: {successful}/{len(datasets)} datasets"
+    )
 
     if failed > 0:
         print(f"Failed datasets: {failed}")
@@ -53,7 +59,7 @@ def main():
                 print(f"   • {name}: {report['error']}")
 
     # ------------------------------------------------------------------
-    # Transformation phase — run all 24 business questions
+    # Transformation phase - run all 24 business questions
     # ------------------------------------------------------------------
     print(f"\n{'=' * 80}")
     print("TRANSFORMATION PHASE")

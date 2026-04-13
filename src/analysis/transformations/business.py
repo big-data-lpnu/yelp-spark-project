@@ -26,7 +26,7 @@ from src.analysis.transformations.utils import save_csv
 
 
 # ---------------------------------------------------------------------------
-# Q1 — filter + group by
+# Q1 - filter + group by
 # Top 10 cities by number of currently open businesses
 # ---------------------------------------------------------------------------
 def q1_top_cities_by_open_businesses(df_business: DataFrame) -> DataFrame:
@@ -50,7 +50,7 @@ def q1_top_cities_by_open_businesses(df_business: DataFrame) -> DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Q2 — filter + window
+# Q2 - filter + window
 # Top 5 businesses by review count per state (open businesses only)
 # ---------------------------------------------------------------------------
 def q2_top_businesses_per_state(df_business: DataFrame) -> DataFrame:
@@ -67,7 +67,9 @@ def q2_top_businesses_per_state(df_business: DataFrame) -> DataFrame:
         df_business.filter(col("is_open") == 1)
         .withColumn("rank_in_state", rank().over(window_spec))
         .filter(col("rank_in_state") <= 5)
-        .select("state", "name", "city", "stars", "review_count", "rank_in_state")
+        .select(
+            "state", "name", "city", "stars", "review_count", "rank_in_state"
+        )
         .orderBy("state", "rank_in_state")
     )
 
@@ -77,7 +79,7 @@ def q2_top_businesses_per_state(df_business: DataFrame) -> DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Q3 — join + group by
+# Q3 - join + group by
 # Average review stars per state (business + review join)
 # ---------------------------------------------------------------------------
 def q3_avg_review_stars_per_state(
@@ -92,7 +94,9 @@ def q3_avg_review_stars_per_state(
     """
     result = (
         df_business.select("business_id", "state")
-        .join(df_review.select("business_id", "stars", "review_id"), "business_id")
+        .join(
+            df_review.select("business_id", "stars", "review_id"), "business_id"
+        )
         .groupBy("state")
         .agg(
             avg("stars").alias("avg_review_stars"),
@@ -107,7 +111,7 @@ def q3_avg_review_stars_per_state(
 
 
 # ---------------------------------------------------------------------------
-# Q4 — join + filter
+# Q4 - join + filter
 # Top 20 most-reviewed businesses in Pennsylvania (PA)
 # ---------------------------------------------------------------------------
 def q4_top_businesses_in_pennsylvania(
@@ -143,7 +147,7 @@ def q4_top_businesses_in_pennsylvania(
 
 
 # ---------------------------------------------------------------------------
-# Q5 — window
+# Q5 - window
 # Each business star rating compared to its city's average (delta)
 # ---------------------------------------------------------------------------
 def q5_business_vs_city_avg_stars(df_business: DataFrame) -> DataFrame:
@@ -159,7 +163,14 @@ def q5_business_vs_city_avg_stars(df_business: DataFrame) -> DataFrame:
     result = (
         df_business.withColumn("city_avg_stars", avg("stars").over(window_city))
         .withColumn("diff_from_city_avg", col("stars") - col("city_avg_stars"))
-        .select("name", "city", "state", "stars", "city_avg_stars", "diff_from_city_avg")
+        .select(
+            "name",
+            "city",
+            "state",
+            "stars",
+            "city_avg_stars",
+            "diff_from_city_avg",
+        )
         .orderBy(desc("diff_from_city_avg"))
         .limit(30)
     )
@@ -170,14 +181,14 @@ def q5_business_vs_city_avg_stars(df_business: DataFrame) -> DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Q6 — filter
+# Q6 - filter
 # Open restaurants rated ≥ 4.5 with ≥ 100 reviews
 # ---------------------------------------------------------------------------
 def q6_top_open_restaurants(df_business: DataFrame) -> DataFrame:
     """
     Business question:
         Which currently open restaurants have a rating of 4.5 stars or higher
-        and at least 100 reviews — the best and most popular places to eat?
+        and at least 100 reviews - the best and most popular places to eat?
 
     Operations used: filter, orderBy
     """
@@ -192,22 +203,48 @@ def q6_top_open_restaurants(df_business: DataFrame) -> DataFrame:
         .orderBy(desc("review_count"))
     )
 
-    print("\n=== Q6 Execution Plan: Top open restaurants (4.5+, 100+ reviews) ===")
+    print(
+        "\n=== Q6 Execution Plan: Top open restaurants (4.5+, 100+ reviews) ==="
+    )
     result.explain(extended=True)
     return result
 
 
 # ---------------------------------------------------------------------------
-# Wrapper — run every question and persist results
+# Wrapper - run every question and persist results
 # ---------------------------------------------------------------------------
-def run_all(df_business: DataFrame, df_review: DataFrame, results_dir: Path) -> None:
+def run_all(
+    df_business: DataFrame, df_review: DataFrame, results_dir: Path
+) -> None:
     """Run all six questions sequentially and save results as CSV."""
     out = results_dir / "business"
     out.mkdir(parents=True, exist_ok=True)
 
-    save_csv(q1_top_cities_by_open_businesses(df_business),             out, "q1_top_cities_by_open_businesses")
-    save_csv(q2_top_businesses_per_state(df_business),                  out, "q2_top_businesses_per_state")
-    save_csv(q3_avg_review_stars_per_state(df_business, df_review),     out, "q3_avg_review_stars_per_state")
-    save_csv(q4_top_businesses_in_pennsylvania(df_business, df_review), out, "q4_top_businesses_in_pennsylvania")
-    save_csv(q5_business_vs_city_avg_stars(df_business),                out, "q5_business_vs_city_avg_stars")
-    save_csv(q6_top_open_restaurants(df_business),                      out, "q6_top_open_restaurants")
+    save_csv(
+        q1_top_cities_by_open_businesses(df_business),
+        out,
+        "q1_top_cities_by_open_businesses",
+    )
+    save_csv(
+        q2_top_businesses_per_state(df_business),
+        out,
+        "q2_top_businesses_per_state",
+    )
+    save_csv(
+        q3_avg_review_stars_per_state(df_business, df_review),
+        out,
+        "q3_avg_review_stars_per_state",
+    )
+    save_csv(
+        q4_top_businesses_in_pennsylvania(df_business, df_review),
+        out,
+        "q4_top_businesses_in_pennsylvania",
+    )
+    save_csv(
+        q5_business_vs_city_avg_stars(df_business),
+        out,
+        "q5_business_vs_city_avg_stars",
+    )
+    save_csv(
+        q6_top_open_restaurants(df_business), out, "q6_top_open_restaurants"
+    )

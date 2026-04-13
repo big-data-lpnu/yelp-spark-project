@@ -28,22 +28,32 @@ from src.analysis.transformations.utils import save_csv
 
 
 # ---------------------------------------------------------------------------
-# Q1 — filter
+# Q1 - filter
 # Highly-voted reviews (useful + funny + cool > 10) with stars ≥ 4
 # ---------------------------------------------------------------------------
 def q1_highly_voted_reviews(df_review: DataFrame) -> DataFrame:
     """
     Business question:
-        Which reviews were most appreciated by the community — having
+        Which reviews were most appreciated by the community - having
         combined useful, funny, and cool votes above 10 with a high star rating?
 
     Operations used: filter, orderBy, limit
     """
     result = (
         df_review.filter(
-            (col("useful") + col("funny") + col("cool") > 10) & (col("stars") >= 4)
+            (col("useful") + col("funny") + col("cool") > 10)
+            & (col("stars") >= 4)
         )
-        .select("review_id", "business_id", "user_id", "stars", "useful", "funny", "cool", "date")
+        .select(
+            "review_id",
+            "business_id",
+            "user_id",
+            "stars",
+            "useful",
+            "funny",
+            "cool",
+            "date",
+        )
         .orderBy(desc("useful"))
         .limit(20)
     )
@@ -54,7 +64,7 @@ def q1_highly_voted_reviews(df_review: DataFrame) -> DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Q2 — group by
+# Q2 - group by
 # Review volume and average stars grouped by year-month
 # ---------------------------------------------------------------------------
 def q2_reviews_by_month(df_review: DataFrame) -> DataFrame:
@@ -66,7 +76,9 @@ def q2_reviews_by_month(df_review: DataFrame) -> DataFrame:
     Operations used: withColumn (date formatting), groupBy, agg, orderBy
     """
     result = (
-        df_review.withColumn("year_month", date_format(to_date(col("date")), "yyyy-MM"))
+        df_review.withColumn(
+            "year_month", date_format(to_date(col("date")), "yyyy-MM")
+        )
         .groupBy("year_month")
         .agg(
             count("review_id").alias("review_count"),
@@ -81,7 +93,7 @@ def q2_reviews_by_month(df_review: DataFrame) -> DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Q3 — window
+# Q3 - window
 # Most recent review per business (row_number, ordered by date desc)
 # ---------------------------------------------------------------------------
 def q3_latest_review_per_business(df_review: DataFrame) -> DataFrame:
@@ -96,7 +108,14 @@ def q3_latest_review_per_business(df_review: DataFrame) -> DataFrame:
     result = (
         df_review.withColumn("recency_rank", row_number().over(window_biz))
         .filter(col("recency_rank") == 1)
-        .select("business_id", "review_id", "user_id", "stars", "date", "recency_rank")
+        .select(
+            "business_id",
+            "review_id",
+            "user_id",
+            "stars",
+            "date",
+            "recency_rank",
+        )
         .orderBy("date")
         .limit(30)
     )
@@ -107,7 +126,7 @@ def q3_latest_review_per_business(df_review: DataFrame) -> DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Q4 — join + group by
+# Q4 - join + group by
 # Top 20 businesses by total number of reviews and their average score
 # ---------------------------------------------------------------------------
 def q4_top_businesses_by_reviews(
@@ -120,12 +139,9 @@ def q4_top_businesses_by_reviews(
 
     Operations used: groupBy, join, filter, orderBy, limit
     """
-    review_stats = (
-        df_review.groupBy("business_id")
-        .agg(
-            count("review_id").alias("total_reviews"),
-            avg("stars").alias("avg_review_stars"),
-        )
+    review_stats = df_review.groupBy("business_id").agg(
+        count("review_id").alias("total_reviews"),
+        avg("stars").alias("avg_review_stars"),
     )
 
     result = (
@@ -144,7 +160,7 @@ def q4_top_businesses_by_reviews(
 
 
 # ---------------------------------------------------------------------------
-# Q5 — join + filter
+# Q5 - join + filter
 # 5-star reviews for businesses categorised under "Food"
 # ---------------------------------------------------------------------------
 def q5_five_star_food_reviews(
@@ -164,7 +180,9 @@ def q5_five_star_food_reviews(
     result = (
         df_review.filter(col("stars") == 5)
         .join(food_businesses, "business_id")
-        .select("name", "city", "state", "stars", "useful", "funny", "cool", "date")
+        .select(
+            "name", "city", "state", "stars", "useful", "funny", "cool", "date"
+        )
         .orderBy(desc("useful"))
         .limit(30)
     )
@@ -175,14 +193,14 @@ def q5_five_star_food_reviews(
 
 
 # ---------------------------------------------------------------------------
-# Q6 — window
+# Q6 - window
 # Cumulative review count per business ordered by review date
 # ---------------------------------------------------------------------------
 def q6_cumulative_reviews_per_business(df_review: DataFrame) -> DataFrame:
     """
     Business question:
         How has the cumulative number of reviews grown over time for each
-        business — showing the running total ordered by review date?
+        business - showing the running total ordered by review date?
 
     Operations used: window (count with rowsBetween), orderBy, limit
     """
@@ -193,8 +211,12 @@ def q6_cumulative_reviews_per_business(df_review: DataFrame) -> DataFrame:
     )
 
     result = (
-        df_review.withColumn("cumulative_reviews", count("review_id").over(window_running))
-        .select("business_id", "review_id", "date", "stars", "cumulative_reviews")
+        df_review.withColumn(
+            "cumulative_reviews", count("review_id").over(window_running)
+        )
+        .select(
+            "business_id", "review_id", "date", "stars", "cumulative_reviews"
+        )
         .orderBy("business_id", "date")
         .limit(30)
     )
@@ -205,16 +227,34 @@ def q6_cumulative_reviews_per_business(df_review: DataFrame) -> DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Wrapper — run every question and persist results
+# Wrapper - run every question and persist results
 # ---------------------------------------------------------------------------
-def run_all(df_business: DataFrame, df_review: DataFrame, results_dir: Path) -> None:
+def run_all(
+    df_business: DataFrame, df_review: DataFrame, results_dir: Path
+) -> None:
     """Run all six questions sequentially and save results as CSV."""
     out = results_dir / "review"
     out.mkdir(parents=True, exist_ok=True)
 
-    save_csv(q1_highly_voted_reviews(df_review),                    out, "q1_highly_voted_reviews")
-    save_csv(q2_reviews_by_month(df_review),                        out, "q2_reviews_by_month")
-    save_csv(q3_latest_review_per_business(df_review),              out, "q3_latest_review_per_business")
-    save_csv(q4_top_businesses_by_reviews(df_business, df_review),  out, "q4_top_businesses_by_reviews")
-    save_csv(q5_five_star_food_reviews(df_business, df_review),     out, "q5_five_star_food_reviews")
-    save_csv(q6_cumulative_reviews_per_business(df_review),         out, "q6_cumulative_reviews_per_business")
+    save_csv(q1_highly_voted_reviews(df_review), out, "q1_highly_voted_reviews")
+    save_csv(q2_reviews_by_month(df_review), out, "q2_reviews_by_month")
+    save_csv(
+        q3_latest_review_per_business(df_review),
+        out,
+        "q3_latest_review_per_business",
+    )
+    save_csv(
+        q4_top_businesses_by_reviews(df_business, df_review),
+        out,
+        "q4_top_businesses_by_reviews",
+    )
+    save_csv(
+        q5_five_star_food_reviews(df_business, df_review),
+        out,
+        "q5_five_star_food_reviews",
+    )
+    save_csv(
+        q6_cumulative_reviews_per_business(df_review),
+        out,
+        "q6_cumulative_reviews_per_business",
+    )

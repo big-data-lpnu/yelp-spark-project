@@ -6,7 +6,7 @@ from pyspark.sql import DataFrame
 
 
 def save_csv(df: DataFrame, dir: Path, name: str) -> None:
-    """Write *df* to a single CSV file inside *dir*."""
+    """Write *df* to CSV files inside *dir*."""
     out = str(dir / name)
     df.coalesce(1).write.mode("overwrite").option("header", "true").csv(out)
     print(f"  -> saved: {out}")
