@@ -25,5 +25,8 @@ wheels/
 # Download artifacts
 /artifacts/
 
+# Transformation results
+/results/
+
 *.xml
 *.iml

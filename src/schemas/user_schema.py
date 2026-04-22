@@ -4,7 +4,6 @@ from pyspark.sql.types import (
     StringType,
     DoubleType,
     IntegerType,
-    ArrayType
 )
 
 
@@ -15,7 +14,8 @@ user_schema = StructType([
     StructField("review_count", IntegerType(), True),
     StructField("yelping_since", StringType(), True),
 
-    StructField("friends", ArrayType(StringType()), True),
+    # Actual data: comma-separated user_id string, e.g. "id1,id2,id3"
+    StructField("friends", StringType(), True),
 
     StructField("useful", IntegerType(), True),
     StructField("funny", IntegerType(), True),
@@ -23,7 +23,8 @@ user_schema = StructType([
 
     StructField("fans", IntegerType(), True),
 
-    StructField("elite", ArrayType(IntegerType()), True),
+    # Actual data: comma-separated years string, e.g. "2012,2013,2014"
+    StructField("elite", StringType(), True),
 
     StructField("average_stars", DoubleType(), True),
 

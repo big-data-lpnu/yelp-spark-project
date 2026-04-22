@@ -1,4 +1,4 @@
-# Created at Sunday, 2026-02-22 18:11
+# Created on Sunday, 2026-02-22 18:11
 # Please maintain this file as the source of truth for all constants used in the project.
 
 from logging import DEBUG as DEBUG_LOGGING_LEVEL
@@ -19,6 +19,9 @@ YELP_DATASET_JSON_URL = (
 YELP_DATASET_PHOTOS_URL = (
     "https://business.yelp.com/external-assets/files/Yelp-Photos.zip"
 )
+
+# Results output directory (add /results/ to .gitignore)
+RESULTS_DIR = PROJECT_ROOT / "results"
 
 # Logging configuration
 LOGGING_LEVEL = DEBUG_LOGGING_LEVEL

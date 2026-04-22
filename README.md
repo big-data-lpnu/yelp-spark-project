@@ -27,20 +27,29 @@ The project is organized into the following directories:
 1. Oleksii Horyshevskyi:
     - Setting up the project structure and environment
     - Dataset downloading & unpacking automation
+    - Dockerization of the project
+    - Business analytics transformations and questions about users
 
 2. Danylo Shliakhetko:
-    TBD
+    - ETL pipeline design and implementation
+    - Data cleaning and preprocessing
+    - Business analytics transformations and questions about engagements
 
 3. Illia Matsko:
-    TBD
+    - Dataset schema design
+    - Data loading and validation
+    - Business analytics transformations and questions about businesses
 
 4. Solomiia Trush:
-    TBD
+    - ETL pipeline design and implementation
+    - Data cleaning and preprocessing
+    - Business analytics transformations and questions about reviews
 
 ## Requirements
 
 - Python 3.14 or higher
 - Apache Spark
+- Java 17
 
 ## Installation
 
@@ -92,8 +101,11 @@ Via Docker:
 # Build the Docker image
 docker build -t yelp-spark-project .
 
+# Grant permissions to the results directory
+mkdir -p results && sudo chmod o+w results
+
 # Execute
-docker run -v $(pwd)/artifacts:/app/artifacts yelp-spark-project
+docker run -v $(pwd)/artifacts:/app/artifacts -v $(pwd)/results:/app/results yelp-spark-project
 ```
 
 ## License
