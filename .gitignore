@@ -28,5 +28,8 @@ wheels/
 # Transformation results
 /results/
 
+# ML report tables are deliverables (see src/reports/ml/README.md)
+!src/reports/ml/tables/*.csv
+
 *.xml
 *.iml

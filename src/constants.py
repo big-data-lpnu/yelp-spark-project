@@ -23,6 +23,13 @@ YELP_DATASET_PHOTOS_URL = (
 # Results output directory (add /results/ to .gitignore)
 RESULTS_DIR = PROJECT_ROOT / "results"
 
+# Machine learning stage
+ML_FEATURES_PATH = PROCESSED_DIR / "ml" / "user_features"
+ML_CHECKPOINT_DIR = PROCESSED_DIR / "ml" / "checkpoints"
+ML_RESULTS_DIR = RESULTS_DIR / "ml"
+ML_REPORT_DIR = PROJECT_ROOT / "src" / "reports" / "ml"
+ML_SEED = 42
+
 # Logging configuration
 LOGGING_LEVEL = DEBUG_LOGGING_LEVEL
 
