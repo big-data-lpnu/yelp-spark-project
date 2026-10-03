@@ -1,7 +1,7 @@
 """
 Training, model selection and training-process analysis.
 
-Protocol (identical for every model family):
+Protocol (identical for every model):
 
 1. Every grid point is fitted on the TRAIN split; the fit time and the
    train and validation metrics are recorded.
@@ -10,6 +10,11 @@ Protocol (identical for every model family):
 3. That train-only model is scored once on TEST. There is no refit on
    train+validation, so the curves, the selected threshold and the test
    numbers all describe the same fitted model.
+
+Classification: elite users are 4.6% of the data. Instead of class weights
+(the neural network does not support them) every classifier gets its own
+decision threshold, chosen on VALIDATION by maximising F1, and applied
+unchanged to TEST. Metrics at the default 0.5 are reported too.
 
 GBT: one long fit per depth is scored after every boosting iteration on train
 and validation (``evaluateEachIteration``); the iteration with the lowest
@@ -43,9 +48,13 @@ from src.ml.evaluation import (
     roc_auc,
 )
 from src.ml.models import (
+    FM,
     GBT,
     GBT_MAX_ITER,
     LINEAR,
+    LOGISTIC,
+    MLP,
+    RANDOM_FOREST,
     ModelSpec,
     classification_models,
     regression_models,
@@ -53,20 +62,18 @@ from src.ml.models import (
 from src.ml.pipeline import (
     BUCKET_COL,
     TRAIN_BUCKETS,
-    WEIGHT_COL,
     PreparedData,
     TaskSpec,
+    classification_task,
     prepare,
+    regression_task,
 )
 
-# Lowest / highest possible star rating; regression output is clipped to it.
-STAR_RANGE = (1.0, 5.0)
+# Nested training subsets for the learning curve, as hash-bucket limits.
+# The full training split (TRAIN_BUCKETS) is the selected model itself.
+LEARNING_CURVE_BUCKETS = (1, 3, 7, 17, 35)
 
-# Nested training subsets for the learning curve, as hash-bucket limits
-# (TRAIN_BUCKETS = 70 is the full training split).
-LEARNING_CURVE_BUCKETS = (4, 7, 17, 35, TRAIN_BUCKETS)
-
-PROBABILITY_COL = "p_closed"
+PROBABILITY_COL = "p_positive"
 
 
 def _log(msg: str) -> None:
@@ -80,33 +87,25 @@ def configure_spark_for_training(spark: SparkSession) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task-specific scoring
+# Scoring
 # ---------------------------------------------------------------------------
 
 
-def _is_classification(task: TaskSpec) -> bool:
-    return task.label == "is_closed"
-
-
 def predict(model: Model, df: DataFrame, task: TaskSpec) -> DataFrame:
-    """Model predictions; regression output clipped to the 1-5 star range."""
+    """Predictions; P(positive) for classifiers, log fans clipped at 0."""
     out = model.transform(df)
-    if _is_classification(task):
+    if task.is_classification:
         return out.withColumn(
             PROBABILITY_COL, vector_to_array("probability").getItem(1)
         )
-    return out.withColumn(
-        "prediction",
-        F.least(
-            F.greatest("prediction", F.lit(STAR_RANGE[0])), F.lit(STAR_RANGE[1])
-        ),
-    )
+    # log(1 + fans) can not be negative.
+    return out.withColumn("prediction", F.greatest("prediction", F.lit(0.0)))
 
 
 def score(model: Model, df: DataFrame, task: TaskSpec) -> dict[str, float]:
     predictions = predict(model, df, task).cache()
     try:
-        if _is_classification(task):
+        if task.is_classification:
             return classification_metrics(predictions, task.label)
         return regression_metrics(predictions, task.label)
     finally:
@@ -115,7 +114,7 @@ def score(model: Model, df: DataFrame, task: TaskSpec) -> dict[str, float]:
 
 def selection_metric(task: TaskSpec) -> tuple[str, bool]:
     """(metric name, higher is better) used to pick hyperparameters."""
-    if _is_classification(task):
+    if task.is_classification:
         return "pr_auc", True
     return "rmse", False
 
@@ -126,9 +125,9 @@ def _is_better(task: TaskSpec, a: float, b: float | None) -> bool:
 
 
 def collect_scores(model: Model, df: DataFrame, task: TaskSpec) -> pd.DataFrame:
-    """Label, prediction (and P(closed)) plus diagnostics as pandas."""
-    columns = [task.label, "prediction", "log_review_count", "state"]
-    if _is_classification(task):
+    """Label, prediction (and P(positive)) plus raw counts, as pandas."""
+    columns = [task.label, "prediction", "fans", "review_count"]
+    if task.is_classification:
         columns.append(PROBABILITY_COL)
     return predict(model, df, task).select(*columns).toPandas()
 
@@ -139,8 +138,8 @@ def collect_scores(model: Model, df: DataFrame, task: TaskSpec) -> pd.DataFrame:
 
 
 @dataclass
-class FamilyResult:
-    """Everything recorded for one model family on one task."""
+class ModelResult:
+    """Everything recorded for one model on one task."""
 
     spec: ModelSpec
     trials: list[dict[str, Any]]
@@ -155,31 +154,31 @@ class FamilyResult:
     validation_scores: pd.DataFrame | None = None
     test_scores: pd.DataFrame | None = None
     test_ci: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Classification only: threshold chosen on validation and the test
+    # metrics at that threshold (the headline numbers).
+    threshold: float | None = None
+    test_tuned: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
 class TaskResult:
     task: TaskSpec
     data: PreparedData
-    families: list[FamilyResult]
+    models: list[ModelResult]
     baselines: dict[str, dict[str, float]] = field(default_factory=dict)
     learning_curve: list[dict[str, Any]] = field(default_factory=list)
     extras: dict[str, Any] = field(default_factory=dict)
     split_summary: list[dict[str, Any]] = field(default_factory=list)
 
     @property
-    def best(self) -> FamilyResult:
+    def best(self) -> ModelResult:
         name, higher = selection_metric(self.task)
-        key = (
-            (lambda f: f.validation_metrics[name])
-            if higher
-            else (lambda f: -f.validation_metrics[name])
-        )
-        return max(self.families, key=key)
+        sign = 1 if higher else -1
+        return max(self.models, key=lambda m: sign * m.validation_metrics[name])
 
 
 # ---------------------------------------------------------------------------
-# Fitting one family
+# Fitting one model
 # ---------------------------------------------------------------------------
 
 
@@ -189,51 +188,52 @@ def _timed_fit(estimator, df: DataFrame):
     return model, time.perf_counter() - start
 
 
-def _unweighted(df: DataFrame) -> DataFrame:
-    """Evaluation view: weight 1 for every row (GBT loss reads weightCol)."""
-    return df.withColumn(WEIGHT_COL, F.lit(1.0))
+def _gbt_curves(model, data: PreparedData) -> dict[str, list]:
+    """Per-iteration train/validation RMSE of a fitted GBT regressor."""
 
+    def rmse(df):
+        return [
+            math.sqrt(v) for v in model.evaluateEachIteration(df, "squared")
+        ]
 
-def _gbt_curves(model, data: PreparedData, task: TaskSpec) -> dict[str, list]:
-    """Per-iteration train/validation loss of a fitted GBT model."""
-    train, val = _unweighted(data.train), _unweighted(data.validation)
-    if _is_classification(task):
-        # Spark's GBT log-loss: 2*log(1 + exp(-2*y*F)), y in {-1, 1}.
-        return {
-            "train": list(model.evaluateEachIteration(train)),
-            "validation": list(model.evaluateEachIteration(val)),
-            "loss": "log-loss",
-        }
-    # "squared" returns the MSE after each iteration -> RMSE.
-    return {
-        "train": [
-            math.sqrt(v) for v in model.evaluateEachIteration(train, "squared")
-        ],
-        "validation": [
-            math.sqrt(v) for v in model.evaluateEachIteration(val, "squared")
-        ],
-        "loss": "rmse",
-    }
+    return {"train": rmse(data.train), "validation": rmse(data.validation)}
 
 
 def _importances(model, names: list[str]) -> list[tuple[str, float]]:
+    """Tree importances, or coefficients on standardised features."""
     if hasattr(model, "featureImportances"):
         values = model.featureImportances.toArray()
     elif hasattr(model, "coefficients"):
-        # Features are standardised, so coefficients are comparable.
         values = model.coefficients.toArray()
-    else:
+    elif hasattr(model, "linear"):  # factorization machine: linear part
+        values = model.linear.toArray()
+    else:  # neural network: no per-feature weights to report
         return []
     pairs = list(zip(names, (float(v) for v in values)))
     return sorted(pairs, key=lambda p: abs(p[1]), reverse=True)
 
 
-def fit_family(spec: ModelSpec, data: PreparedData) -> FamilyResult:
+def _objective_history(model) -> list[float]:
+    """Loss per optimiser iteration from the model's training summary."""
+    try:
+        summary = model.summary
+        # PySpark exposes ``summary`` as a property on Linear/Logistic
+        # models but as a method on MultilayerPerceptron.
+        if callable(summary):
+            summary = summary()
+        history = [float(v) for v in summary.objectiveHistory]
+    except Exception:  # no training summary for this model type
+        return []
+    # Tree ensembles report a placeholder history of [0.0].
+    return history if len(history) > 1 else []
+
+
+def fit_model(spec: ModelSpec, data: PreparedData) -> ModelResult:
     """Fit every grid point, keep the best on validation, score it on test."""
     task = data.task
     metric, _ = selection_metric(task)
     trials: list[dict[str, Any]] = []
-    best: tuple | None = None  # (val metric, params, model, fit time)
+    best: tuple | None = None
     curves: dict[str, Any] = {}
 
     for params in spec.grid:
@@ -244,13 +244,14 @@ def fit_family(spec: ModelSpec, data: PreparedData) -> FamilyResult:
 
         if spec.key == GBT:
             fitted_iters = params.get("maxIter", GBT_MAX_ITER)
-            gbt_curve = _gbt_curves(model, data, task)
-            best_iter = int(np.argmin(gbt_curve["validation"])) + 1
-            name = f"maxDepth={params['maxDepth']}, step={params['stepSize']}"
-            curves.setdefault("gbt_iterations", {})[name] = {
-                **gbt_curve,
+            curve = _gbt_curves(model, data)
+            best_iter = int(np.argmin(curve["validation"])) + 1
+            curves.setdefault("gbt_iterations", {})[
+                f"maxDepth={params['maxDepth']}"
+            ] = {
+                **curve,
                 "best_iter": best_iter,
-                # Minimum at the budget edge: still improving, not converged.
+                # Minimum at the budget edge: still improving.
                 "censored": best_iter == fitted_iters,
             }
             params["maxIter"] = best_iter
@@ -260,12 +261,18 @@ def fit_family(spec: ModelSpec, data: PreparedData) -> FamilyResult:
                 model, seconds = _timed_fit(spec.make(params), data.train)
                 search_seconds += seconds
 
-        train_m = score(model, _unweighted(data.train), task)
+        history = _objective_history(model)
+        if history:
+            curves.setdefault("objective_history", {})[
+                _params_label(params)
+            ] = history
+
+        train_m = score(model, data.train, task)
         val_m = score(model, data.validation, task)
         trials.append(
             {
                 "model": spec.name,
-                **{k: params[k] for k in params},
+                **params,
                 "fit_seconds": round(seconds, 2),
                 "search_seconds": round(search_seconds, 2),
                 **{f"train_{k}": v for k, v in train_m.items()},
@@ -281,12 +288,7 @@ def fit_family(spec: ModelSpec, data: PreparedData) -> FamilyResult:
             best = (val_m[metric], params, model, seconds, train_m, val_m)
 
     _, params, model, seconds, train_m, val_m = best
-    test_m = score(model, data.test, task)
-
-    if spec.key == LINEAR:
-        curves["objective_history"] = list(model.summary.objectiveHistory)
-
-    result = FamilyResult(
+    result = ModelResult(
         spec=spec,
         trials=trials,
         best_params=params,
@@ -294,18 +296,40 @@ def fit_family(spec: ModelSpec, data: PreparedData) -> FamilyResult:
         fit_seconds=seconds,
         train_metrics=train_m,
         validation_metrics=val_m,
-        test_metrics=test_m,
+        test_metrics=score(model, data.test, task),
         curves=curves,
         importances=_importances(model, data.feature_names),
         validation_scores=collect_scores(model, data.validation, task),
         test_scores=collect_scores(model, data.test, task),
     )
-    result.test_ci = test_confidence_intervals(result.test_scores, task)
+    if task.is_classification:
+        _tune_threshold(result, task)
+    result.test_ci = confidence_intervals(result, task)
     _log(
-        f"  -> best {spec.name} {params}: val {metric}={val_m[metric]:.4f}, "
-        f"test {metric}={test_m[metric]:.4f}"
+        f"  -> best {spec.name} {params}: val {metric}="
+        f"{val_m[metric]:.4f}, test {metric}={result.test_metrics[metric]:.4f}"
     )
     return result
+
+
+def _params_label(params: dict[str, Any]) -> str:
+    return ", ".join(f"{k}={v}" for k, v in params.items())
+
+
+def _tune_threshold(result: ModelResult, task: TaskSpec) -> None:
+    """F1-optimal threshold on validation, applied unchanged to test."""
+    val, test = result.validation_scores, result.test_scores
+    result.threshold = best_threshold(
+        val[task.label].to_numpy(dtype=float),
+        val[PROBABILITY_COL].to_numpy(dtype=float),
+    )
+    y = test[task.label].to_numpy(dtype=float)
+    p = test[PROBABILITY_COL].to_numpy(dtype=float)
+    result.test_tuned = {
+        **np_threshold_metrics(y, (p >= result.threshold) * 1.0),
+        "roc_auc": result.test_metrics["roc_auc"],
+        "pr_auc": result.test_metrics["pr_auc"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -313,49 +337,47 @@ def fit_family(spec: ModelSpec, data: PreparedData) -> FamilyResult:
 # ---------------------------------------------------------------------------
 
 
-def _np_classification(y, pred, p):
-    return {
-        **np_threshold_metrics(y, pred),
-        "pr_auc": pr_auc(y, p),
-        "roc_auc": roc_auc(y, p),
-    }
+def confidence_intervals(result: ModelResult, task: TaskSpec) -> dict:
+    """Bootstrap 95% intervals of the test metrics (row resamples)."""
+    s = result.test_scores
+    y = s[task.label].to_numpy(dtype=float)
+    if not task.is_classification:
+        pred = s["prediction"].to_numpy(dtype=float)
+        return bootstrap(np_regression_metrics, (y, pred))
 
+    p = s[PROBABILITY_COL].to_numpy(dtype=float)
+    threshold = result.threshold
 
-def test_confidence_intervals(scores: pd.DataFrame, task: TaskSpec) -> dict:
-    """Bootstrap 95% intervals of the test metrics (1000 row resamples)."""
-    y = scores[task.label].to_numpy(dtype=float)
-    pred = scores["prediction"].to_numpy(dtype=float)
-    if _is_classification(task):
-        p = scores[PROBABILITY_COL].to_numpy(dtype=float)
-        return bootstrap(_np_classification, (y, pred, p))
-    return bootstrap(np_regression_metrics, (y, pred))
+    def metrics(y_, p_):
+        return {
+            **np_threshold_metrics(y_, (p_ >= threshold) * 1.0),
+            "pr_auc": pr_auc(y_, p_),
+            "roc_auc": roc_auc(y_, p_),
+        }
+
+    return bootstrap(metrics, (y, p))
 
 
 def compare_top_two(result: TaskResult) -> dict[str, Any]:
-    """Paired bootstrap of the test-metric difference of the two best models."""
+    """Paired bootstrap of the test-metric difference of the two best."""
     metric, higher = selection_metric(result.task)
     ranked = sorted(
-        result.families,
-        key=lambda f: f.validation_metrics[metric],
+        result.models,
+        key=lambda m: m.validation_metrics[metric],
         reverse=higher,
     )
     a, b = ranked[0], ranked[1]
     y = a.test_scores[result.task.label].to_numpy(dtype=float)
-    if _is_classification(result.task):
-        pa = a.test_scores[PROBABILITY_COL].to_numpy(dtype=float)
-        pb = b.test_scores[PROBABILITY_COL].to_numpy(dtype=float)
-        diff = paired_bootstrap_diff(pr_auc, y, pa, pb, higher_is_better=True)
-        name = "pr_auc"
-    else:
-        pa = a.test_scores["prediction"].to_numpy(dtype=float)
-        pb = b.test_scores["prediction"].to_numpy(dtype=float)
+    column = PROBABILITY_COL if result.task.is_classification else "prediction"
+    pa = a.test_scores[column].to_numpy(dtype=float)
+    pb = b.test_scores[column].to_numpy(dtype=float)
 
-        def rmse(y_, p_):
-            return float(np.sqrt(np.mean((p_ - y_) ** 2)))
+    def rmse(y_, p_):
+        return float(np.sqrt(np.mean((p_ - y_) ** 2)))
 
-        diff = paired_bootstrap_diff(rmse, y, pa, pb, higher_is_better=False)
-        name = "rmse"
-    return {"a": a.spec.name, "b": b.spec.name, "metric": name, **diff}
+    fn = pr_auc if result.task.is_classification else rmse
+    diff = paired_bootstrap_diff(fn, y, pa, pb, higher_is_better=higher)
+    return {"a": a.spec.name, "b": b.spec.name, "metric": metric, **diff}
 
 
 # ---------------------------------------------------------------------------
@@ -364,64 +386,43 @@ def compare_top_two(result: TaskResult) -> dict[str, Any]:
 
 
 def regression_baselines(data: PreparedData) -> dict[str, dict[str, float]]:
-    """Train mean, and mean stars per (state, first category) from train."""
+    """Train mean of log fans, and 'nobody has fans' (the median user)."""
     label = data.task.label
     mean = data.train.agg(F.avg(label)).first()[0]
-    # F.get: NULL for businesses without categories (element_at throws).
-    test = data.test.withColumn("primary_category", F.get("category_list", 0))
-    train = data.train.withColumn("primary_category", F.get("category_list", 0))
-    by_group = (
-        train.groupBy("state", "primary_category")
-        .agg(F.avg(label).alias("group_mean"), F.count(F.lit(1)).alias("n"))
-        .filter(F.col("n") >= 5)
-    )
-    by_state = train.groupBy("state").agg(F.avg(label).alias("state_mean"))
-    group_pred = (
-        test.join(by_group, ["state", "primary_category"], "left")
-        .join(by_state, "state", "left")
-        .withColumn(
-            "prediction",
-            F.coalesce("group_mean", "state_mean", F.lit(mean)),
-        )
-    )
     return {
         "Baseline: train mean": regression_metrics(
-            test.withColumn("prediction", F.lit(mean)), label
+            data.test.withColumn("prediction", F.lit(mean)), label
         ),
-        "Baseline: mean by state x category": regression_metrics(
-            group_pred, label
+        "Baseline: 0 fans (median)": regression_metrics(
+            data.test.withColumn("prediction", F.lit(0.0)), label
         ),
     }
 
 
 def classification_baselines(data: PreparedData) -> dict[str, dict[str, float]]:
-    """Majority class, and (if recency is used) a one-feature threshold rule."""
+    """Majority class, and 'elite if review_count >= N' (N on validation)."""
     label = data.task.label
-    baselines = {
-        "Baseline: majority (all open)": classification_metrics(
+    val = data.validation.select(label, "review_count").toPandas()
+    y = val[label].to_numpy(dtype=float)
+    reviews = val["review_count"].to_numpy(dtype=float)
+    candidates = np.unique(np.quantile(reviews, np.linspace(0.5, 0.999, 200)))
+    cut = max(
+        candidates,
+        key=lambda c: np_threshold_metrics(y, (reviews >= c) * 1.0)["f1"],
+    )
+    rule = data.test.withColumn(
+        "prediction", (F.col("review_count") >= cut).cast("double")
+    )
+    return {
+        "Baseline: majority (nobody elite)": classification_metrics(
             data.test.withColumn("prediction", F.lit(0.0)),
             label,
             score_col=None,
-        )
+        ),
+        f"Baseline: review_count >= {cut:.0f}": classification_metrics(
+            rule, label, score_col=None
+        ),
     }
-    if "days_since_last_review" in data.task.numeric_features:
-        val = data.validation.select(label, "days_since_last_review").toPandas()
-        y = val[label].to_numpy(dtype=float)
-        days = val["days_since_last_review"].to_numpy(dtype=float)
-        # Cut-off chosen on validation by F1 over a grid of day quantiles.
-        candidates = np.unique(np.quantile(days, np.linspace(0.5, 0.995, 100)))
-        cut_days = max(
-            candidates,
-            key=lambda c: np_threshold_metrics(y, (days >= c) * 1.0)["f1"],
-        )
-        rule = data.test.withColumn(
-            "prediction",
-            (F.col("days_since_last_review") >= cut_days).cast("double"),
-        )
-        baselines[f"Baseline: days since last review >= {cut_days:.0f}"] = (
-            classification_metrics(rule, label, score_col=None)
-        )
-    return baselines
 
 
 # ---------------------------------------------------------------------------
@@ -429,84 +430,46 @@ def classification_baselines(data: PreparedData) -> dict[str, dict[str, float]]:
 # ---------------------------------------------------------------------------
 
 
-def learning_curve(
-    best: FamilyResult, data: PreparedData
-) -> list[dict[str, Any]]:
-    """Best family/params refitted on nested fractions of the train split."""
+def learning_curve(best: ModelResult, data: PreparedData) -> list[dict]:
+    """Best model/params refitted on nested fractions of the train split."""
+    task = data.task
     rows = []
     for limit in LEARNING_CURVE_BUCKETS:
         subset = data.train.filter(F.col(BUCKET_COL) < limit).cache()
         n = subset.count()
         model, seconds = _timed_fit(best.spec.make(best.best_params), subset)
-        train_m = score(model, _unweighted(subset), data.task)
-        val_m = score(model, data.validation, data.task)
-        subset.unpersist()
         rows.append(
-            {
-                "train_fraction": limit / TRAIN_BUCKETS,
-                "train_rows": n,
-                "fit_seconds": round(seconds, 2),
-                **{f"train_{k}": v for k, v in train_m.items()},
-                **{f"val_{k}": v for k, v in val_m.items()},
-            }
-        )
-        _log(f"  learning curve {limit / TRAIN_BUCKETS:.0%} ({n} rows) done")
-    return rows
-
-
-def threshold_analysis(best: FamilyResult, task: TaskSpec) -> dict[str, Any]:
-    """Pick the F1-optimal threshold on validation and apply it to test."""
-    val, test = best.validation_scores, best.test_scores
-    t = best_threshold(
-        val[task.label].to_numpy(dtype=float),
-        val[PROBABILITY_COL].to_numpy(dtype=float),
-    )
-    y = test[task.label].to_numpy(dtype=float)
-    p = test[PROBABILITY_COL].to_numpy(dtype=float)
-    return {
-        "threshold": t,
-        "test_at_0.5": np_threshold_metrics(y, (p >= 0.5) * 1.0),
-        "test_at_tuned": np_threshold_metrics(y, (p >= t) * 1.0),
-    }
-
-
-def class_weight_comparison(
-    best: FamilyResult, data: PreparedData
-) -> list[dict[str, Any]]:
-    """{weighted, unweighted} x {threshold 0.5, tuned on validation}."""
-    task = data.task
-    unweighted_spec = next(
-        s
-        for s in classification_models(task.label, weighted=False)
-        if s.key == best.spec.key
-    )
-    model, _ = _timed_fit(unweighted_spec.make(best.best_params), data.train)
-    rows = []
-    for name, val_s, test_s in [
-        ("weighted", best.validation_scores, best.test_scores),
-        (
-            "unweighted",
-            collect_scores(model, data.validation, task),
-            collect_scores(model, data.test, task),
-        ),
-    ]:
-        t = best_threshold(
-            val_s[task.label].to_numpy(dtype=float),
-            val_s[PROBABILITY_COL].to_numpy(dtype=float),
-        )
-        y = test_s[task.label].to_numpy(dtype=float)
-        p = test_s[PROBABILITY_COL].to_numpy(dtype=float)
-        for label, threshold in [("0.5", 0.5), ("tuned", t)]:
-            rows.append(
-                {
-                    "class_weights": name,
-                    "threshold": threshold,
-                    "threshold_kind": label,
-                    **np_threshold_metrics(y, (p >= threshold) * 1.0),
-                    "pr_auc": pr_auc(y, p),
-                }
+            _curve_row(
+                limit,
+                n,
+                seconds,
+                score(model, subset, task),
+                score(model, data.validation, task),
             )
+        )
+        subset.unpersist()
+        _log(f"  learning curve {limit / TRAIN_BUCKETS:.1%} ({n} rows) done")
+    # The full training split is the selected model itself.
+    rows.append(
+        _curve_row(
+            TRAIN_BUCKETS,
+            data.train.count(),
+            best.fit_seconds,
+            best.train_metrics,
+            best.validation_metrics,
+        )
+    )
     return rows
+
+
+def _curve_row(limit, n, seconds, train_m, val_m) -> dict[str, Any]:
+    return {
+        "train_fraction": limit / TRAIN_BUCKETS,
+        "train_rows": n,
+        "fit_seconds": round(seconds, 2),
+        **{f"train_{k}": v for k, v in train_m.items()},
+        **{f"val_{k}": v for k, v in val_m.items()},
+    }
 
 
 def split_summary(data: PreparedData) -> list[dict[str, Any]]:
@@ -532,10 +495,7 @@ def split_summary(data: PreparedData) -> list[dict[str, Any]]:
 
 
 def run_task(
-    features: DataFrame,
-    task: TaskSpec,
-    specs: list[ModelSpec],
-    with_learning_curve: bool = True,
+    features: DataFrame, task: TaskSpec, specs: list[ModelSpec], quick: bool
 ) -> TaskResult:
     _log(f"Task {task.name}: preparing data")
     data = prepare(features, task)
@@ -544,16 +504,16 @@ def run_task(
         f"train/val/test = {data.train.count()}/{data.validation.count()}/"
         f"{data.test.count()}"
     )
-    families = []
+    models = []
     for spec in specs:
         _log(
             f"Task {task.name}: tuning {spec.name} ({len(spec.grid)} settings)"
         )
-        families.append(fit_family(spec, data))
+        models.append(fit_model(spec, data))
 
-    result = TaskResult(task=task, data=data, families=families)
+    result = TaskResult(task=task, data=data, models=models)
     result.split_summary = split_summary(data)
-    if with_learning_curve:
+    if not quick:
         _log(f"Task {task.name}: learning curve for {result.best.spec.name}")
         result.learning_curve = learning_curve(result.best, data)
     result.extras["top_two"] = compare_top_two(result)
@@ -561,91 +521,35 @@ def run_task(
 
 
 def run_regression(features: DataFrame, quick: bool = False) -> TaskResult:
-    from src.ml.pipeline import regression_profile_task, regression_task
-
     task = regression_task()
     specs = regression_models(task.label)
-    if quick:
-        specs = _quick(specs)
-    result = run_task(features, task, specs, with_learning_curve=not quick)
+    result = run_task(features, task, _quick(specs) if quick else specs, quick)
     result.baselines = regression_baselines(result.data)
-
-    # Ablation: best family/params using only the listing's own profile.
-    profile = regression_profile_task()
-    _log("Ablation: profile-only features")
-    pdata = prepare(features, profile)
-    best = result.best
-    spec = next(
-        s for s in regression_models(profile.label) if s.key == best.spec.key
-    )
-    model, seconds = _timed_fit(spec.make(best.best_params), pdata.train)
-    result.extras["profile_only"] = {
-        "model": spec.name,
-        "params": best.best_params,
-        "n_features": len(pdata.feature_names),
-        "fit_seconds": seconds,
-        "validation": score(model, pdata.validation, profile),
-        "test": score(model, pdata.test, profile),
-    }
-    release(pdata)
     return result
 
 
-def run_classification(
-    features: DataFrame,
-    include_recency: bool,
-    quick: bool = False,
-    reuse_params_from: TaskResult | None = None,
-) -> TaskResult:
-    """
-    Classify closed businesses.
-
-    The primary run (no recency features) searches the full grids. The
-    "+recency" variant can reuse each family's selected hyperparameters
-    (``reuse_params_from``) so it costs one fit per family; GBT still picks
-    its own number of iterations from a fresh GBT_MAX_ITER-iteration curve.
-    """
-    from src.ml.pipeline import classification_task
-
-    task = classification_task(include_recency=include_recency)
-    specs = classification_models(task.label)
-    if reuse_params_from is not None:
-        chosen = {f.spec.key: f.best_params for f in reuse_params_from.families}
-        for spec in specs:
-            params = dict(chosen[spec.key])
-            if spec.key == GBT:
-                params.pop("maxIter", None)
-                if quick:
-                    params["maxIter"] = QUICK_GBT_ITER
-            spec.grid = [params]
-    elif quick:
-        specs = _quick(specs)
-    learning = not quick and reuse_params_from is None
-    result = run_task(features, task, specs, with_learning_curve=learning)
+def run_classification(features: DataFrame, quick: bool = False) -> TaskResult:
+    task = classification_task()
+    specs = classification_models(task.label, len(task.numeric_features))
+    result = run_task(features, task, _quick(specs) if quick else specs, quick)
     result.baselines = classification_baselines(result.data)
-    best = result.best
-    result.extras["threshold"] = threshold_analysis(best, task)
-    if not quick and reuse_params_from is None:
-        _log("Class weights vs. threshold comparison")
-        result.extras["class_weights"] = class_weight_comparison(
-            best, result.data
-        )
     return result
 
 
-# Development mode: boosting iterations per GBT fit.
-QUICK_GBT_ITER = 50
+# Development mode: one short setting per model.
+QUICK_SETTINGS = {
+    LINEAR: {"regParam": 0.01},
+    FM: {"stepSize": 0.01, "maxIter": 10},
+    GBT: {"maxDepth": 3, "maxIter": 20},
+    LOGISTIC: {"regParam": 0.01},
+    RANDOM_FOREST: {"numTrees": 10, "maxDepth": 8},
+    MLP: {"hidden": [16], "maxIter": 20},
+}
 
 
 def _quick(specs: list[ModelSpec]) -> list[ModelSpec]:
-    """Development mode: two settings per family, one short GBT."""
     for spec in specs:
-        if spec.key == GBT:
-            spec.grid = [
-                {"maxDepth": 3, "stepSize": 0.3, "maxIter": QUICK_GBT_ITER}
-            ]
-        else:
-            spec.grid = [spec.grid[0], spec.grid[len(spec.grid) // 2]]
+        spec.grid = [QUICK_SETTINGS[spec.key]]
     return specs
 
 

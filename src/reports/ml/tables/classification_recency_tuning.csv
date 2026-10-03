@@ -1,5 +1,0 @@
-model,params,fit_seconds,search_seconds,train_f1,val_f1,train_pr_auc,val_pr_auc
-LogisticRegression,"{""regParam"": 0.0005, ""elasticNetParam"": 0.0}",2.79,2.79,0.775914410736344,0.7759888690121248,0.8704643881337196,0.8728295192244053
-DecisionTreeClassifier,"{""maxDepth"": 15, ""minInstancesPerNode"": 20}",1.4,1.4,0.8131621384392416,0.7604709515537541,0.9007937917977586,0.8770494158688322
-RandomForestClassifier,"{""numTrees"": 60, ""maxDepth"": 15}",13.79,13.79,0.8523040735592858,0.7972794640138058,0.9530305149703077,0.9002906834409126
-GBTClassifier,"{""maxDepth"": 7, ""stepSize"": 0.1, ""maxIter"": 200}",100.48,100.48,0.8874028868835075,0.809504217239251,0.9676946907291594,0.9140684770426717

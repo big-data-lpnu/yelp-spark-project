@@ -16,7 +16,7 @@ The project is organized into the following directories:
   - `src/artifacts/`: Dataset download & unpacking automation scripts.
   - `src/analysis/`: Data validation and business analytics transformations.
     - `src/analysis/transformations/`: Topic-specific transformation modules (`business.py`, `engagement.py`, `review.py`, `user.py`).
-  - `src/ml/`: Machine learning stage — business-level feature table, Spark ML preprocessing pipeline, regression (`stars`) and classification (`is_closed`) models, evaluation and plots.
+  - `src/ml/`: Machine learning stage — user-level feature table, Spark ML preprocessing pipeline, regression (number of fans) and classification (elite users) models, evaluation and plots.
   - `src/preprocessing/`: ETL pipeline — data cleaning, flattening, EDA, and column lineage tracking.
   - `src/schemas/`: Dataset schema definitions for all Yelp entities.
   - `src/spark/`: Spark session factory and configuration helpers.
@@ -131,13 +131,19 @@ Local execution:
 uv run -m src.main
 ```
 
-Machine learning stage (regression + classification, ~37 min on 8 cores; writes figures and tables to `src/reports/ml/`):
+Machine learning stage (user level: regression of the number of fans, classification of elite users; 3 models each). The full run is the notebook (~27 min on 8 cores; writes figures and tables to `src/reports/ml/`):
 
 ```bash
-SPARK_MAX_CORES=8 uv run -m src.ml.run          # add --quick for a ~6 min smoke run
+uv run jupyter nbconvert --to notebook --execute --inplace src/notebooks/ml_models.ipynb
 ```
 
-The same steps with inline output are in `src/notebooks/ml_models.ipynb`; the write-up is in [`src/reports/ml/README.md`](src/reports/ml/README.md).
+The same pipeline as a script (`--quick` for a ~4 min smoke run into `results/ml/quick/`):
+
+```bash
+uv run -m src.ml.run --quick
+```
+
+The write-up is in [`src/reports/ml/README.md`](src/reports/ml/README.md).
 
 Unit tests:
 

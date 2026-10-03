@@ -6,8 +6,8 @@ from pyspark.ml.linalg import Vectors
 from src.ml import evaluation as ev
 
 
-def test_metrics_are_for_the_closed_class():
-    # 10 closed (positive), 90 open; model finds 6 closed with 4 false alarms.
+def test_metrics_are_for_the_positive_class():
+    # 10 positives, 90 negatives; model finds 6 with 4 false alarms.
     m = ev.metrics_from_confusion(tp=6, fp=4, tn=86, fn=4)
     assert m["accuracy"] == pytest.approx(0.92)
     assert m["precision"] == pytest.approx(0.6)
@@ -58,18 +58,19 @@ def test_numpy_auc_matches_spark_evaluator(spark):
 
 
 def test_regression_metrics_spark_vs_numpy(spark):
-    y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-    pred = np.array([1.5, 2.0, 2.0, 4.6, 4.0])
+    fans = np.array([0, 1, 3, 10, 100])
+    pred_fans = np.array([0, 0, 4, 10, 50])
+    y, pred = np.log1p(fans), np.log1p(pred_fans)
     df = spark.createDataFrame(
         [(float(a), float(b)) for a, b in zip(y, pred)],
-        "stars double, prediction double",
+        "log_fans double, prediction double",
     )
-    spark_m = ev.regression_metrics(df, "stars")
+    spark_m = ev.regression_metrics(df, "log_fans")
     np_m = ev.np_regression_metrics(y, pred)
     for key in np_m:
         assert spark_m[key] == pytest.approx(np_m[key])
-    # errors 0.5, 0, 1, 0.6, 1 -> two within half a star
-    assert np_m["within_half_star"] == pytest.approx(2 / 5)
+    # Back on the fan scale: |0| + |-1| + |1| + |0| + |-50| = 52 over 5 users.
+    assert np_m["mae_fans"] == pytest.approx(52 / 5)
 
 
 def test_best_threshold():
@@ -105,12 +106,12 @@ def test_paired_bootstrap_direction():
 def test_tree_auc_uses_probabilities_not_leaf_counts(spark):
     """
     A weighted decision tree's rawPrediction holds leaf class counts; AUC
-    must rank by P(closed) like the NumPy curves and bootstrap CIs do.
+    must rank by P(positive) like the NumPy curves and bootstrap CIs do.
     """
     from pyspark.ml.classification import DecisionTreeClassifier
     from pyspark.ml.feature import VectorAssembler
 
-    from src.ml.pipeline import TaskSpec
+    from src.ml.pipeline import CLASSIFICATION, TaskSpec
     from src.ml.training import PROBABILITY_COL, predict, score
 
     rng = np.random.default_rng(5)
@@ -124,17 +125,22 @@ def test_tree_auc_uses_probabilities_not_leaf_counts(spark):
                 (float(a), float(b), float(c), float(1.0 + 3.0 * c))
                 for a, b, c in zip(x1, x2, y)
             ],
-            "x1 double, x2 double, is_closed double, class_weight double",
+            "x1 double, x2 double, is_elite double, class_weight double",
         )
     )
     model = DecisionTreeClassifier(
-        labelCol="is_closed", weightCol="class_weight", maxDepth=6, seed=1
+        labelCol="is_elite", weightCol="class_weight", maxDepth=6, seed=1
     ).fit(df)
-    task = TaskSpec(name="t", label="is_closed", numeric_features=("x1",))
+    task = TaskSpec(
+        name="t",
+        kind=CLASSIFICATION,
+        label="is_elite",
+        numeric_features=("x1",),
+    )
     metrics = score(model, df, task)
-    scored = predict(model, df, task).select("is_closed", PROBABILITY_COL)
+    scored = predict(model, df, task).select("is_elite", PROBABILITY_COL)
     pdf = scored.toPandas()
-    labels = pdf["is_closed"].to_numpy()
+    labels = pdf["is_elite"].to_numpy()
     probs = pdf[PROBABILITY_COL].to_numpy()
     assert metrics["roc_auc"] == pytest.approx(
         ev.roc_auc(labels, probs), abs=1e-9

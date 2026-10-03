@@ -1,12 +1,15 @@
 """
-Model families and their hyperparameter grids.
+The six models (three per task) and their small hyperparameter grids.
 
-Grids are explicit lists of parameter dicts (not a full cartesian product) so
-each family covers exactly the settings the training analysis needs, e.g.
-a maxDepth sweep for the decision tree and a numTrees sweep for the forest.
-GBT ``maxIter`` is not in the grid: one long fit per depth is scored after
-every boosting iteration and the best iteration count is picked from that
-curve (see ``src.ml.training``).
+Regression (log fans):      LinearRegression, FMRegressor, GBTRegressor
+Classification (is elite):  LogisticRegression, RandomForestClassifier,
+                            MultilayerPerceptronClassifier
+
+Each grid is short on purpose: its points are chosen so that the trials also
+show how training behaves (regularisation strength, learning rate, number
+and depth of trees, network size). GBT ``maxIter`` is not in the grid: one
+long fit per depth is scored after every boosting iteration and the best
+iteration count is picked from that curve (see ``src.ml.training``).
 """
 
 from __future__ import annotations
@@ -16,47 +19,32 @@ from typing import Any, Callable
 
 from pyspark.ml import Estimator
 from pyspark.ml.classification import (
-    DecisionTreeClassifier,
-    GBTClassifier,
     LogisticRegression,
+    MultilayerPerceptronClassifier,
     RandomForestClassifier,
 )
-from pyspark.ml.regression import (
-    DecisionTreeRegressor,
-    GBTRegressor,
-    LinearRegression,
-    RandomForestRegressor,
-)
+from pyspark.ml.regression import FMRegressor, GBTRegressor, LinearRegression
 
 from src.constants import ML_SEED
-from src.ml.pipeline import FEATURES_COL, WEIGHT_COL
+from src.ml.pipeline import FEATURES_COL
 
 LINEAR = "linear"
-DECISION_TREE = "decision_tree"
-RANDOM_FOREST = "random_forest"
+FM = "fm"
 GBT = "gbt"
+LOGISTIC = "logistic"
+RANDOM_FOREST = "random_forest"
+MLP = "mlp"
 
-# Iteration budget per GBT fit. At stepSize 0.1 the validation loss is still
-# (slowly) falling at 200 for shallow trees -> reported as "censored"; the
-# stepSize 0.3 grid point reaches its minimum well inside the budget.
-GBT_MAX_ITER = 200
+# Boosting iterations per GBT fit.
+GBT_MAX_ITER = 100
 
-TREE_DEFAULTS = {
-    "seed": ML_SEED,
-    # Spark's default 256 MB histogram budget makes deep forests on ~170
-    # features fall back to many passes over the data.
-    "maxMemoryInMB": 512,
-    # Cache node ids instead of re-walking deep trees for every row.
-    "cacheNodeIds": True,
-    # GBT lineage grows by one stage per iteration; checkpoint it (needs
-    # SparkContext.setCheckpointDir, set in src.ml.training).
-    "checkpointInterval": 10,
-}
+# Full-batch AdamW iterations per factorization machine fit.
+FM_MAX_ITER = 50
 
 
 @dataclass
 class ModelSpec:
-    """One model family: estimator factory plus the settings to try."""
+    """One model: estimator factory plus the settings to try."""
 
     key: str
     name: str
@@ -66,122 +54,99 @@ class ModelSpec:
     fixed: dict[str, Any] = field(default_factory=dict)
 
 
-def _depth_grid() -> list[dict[str, Any]]:
-    return [
-        {"maxDepth": depth, "minInstancesPerNode": min_instances}
-        for depth in (2, 4, 6, 8, 10, 12, 15)
-        for min_instances in (1, 20)
-    ]
-
-
-def _forest_grid() -> list[dict[str, Any]]:
-    # numTrees sweep at a fixed depth + maxDepth sweep at a fixed size.
-    sweep_trees = [{"numTrees": n, "maxDepth": 12} for n in (10, 30, 60, 100)]
-    sweep_depth = [{"numTrees": 60, "maxDepth": d} for d in (6, 9, 15)]
-    return sweep_trees + sweep_depth
-
-
-def _linear_grid() -> list[dict[str, Any]]:
-    # No regParam=0: the one-hot blocks form a full dummy set that is
-    # collinear with the intercept, so some regularisation is required.
-    return [
-        {"regParam": reg, "elasticNetParam": mix}
-        for reg in (0.0005, 0.005, 0.05)
-        for mix in (0.0, 0.5, 1.0)
-    ]
-
-
-def _gbt_grid() -> list[dict[str, Any]]:
-    # Depth sweep at a small learning rate, plus one fast learner whose
-    # validation loss turns upwards within the iteration budget.
-    slow = [{"maxDepth": depth, "stepSize": 0.1} for depth in (3, 5, 7)]
-    return slow + [{"maxDepth": 5, "stepSize": 0.3}]
-
-
 def regression_models(label: str) -> list[ModelSpec]:
     common = {"featuresCol": FEATURES_COL, "labelCol": label}
-    tree = {**common, **TREE_DEFAULTS}
     return [
         ModelSpec(
             key=LINEAR,
             name="LinearRegression",
             # l-bfgs (not the default normal equation) so the training
             # summary exposes the loss value of every iteration.
-            fixed={"solver": "l-bfgs", "maxIter": 200},
+            fixed={"solver": "l-bfgs", "maxIter": 100, "elasticNetParam": 0},
             make=lambda p: LinearRegression(
-                **common, solver="l-bfgs", maxIter=200, **p
+                **common, **{"solver": "l-bfgs", "maxIter": 100, **p}
             ),
-            grid=_linear_grid(),
+            grid=[{"regParam": r} for r in (0.001, 0.01, 0.1)],
         ),
         ModelSpec(
-            key=DECISION_TREE,
-            name="DecisionTreeRegressor",
-            make=lambda p: DecisionTreeRegressor(**tree, **p),
-            grid=_depth_grid(),
-        ),
-        ModelSpec(
-            key=RANDOM_FOREST,
-            name="RandomForestRegressor",
-            fixed={"subsamplingRate": 0.8, "featureSubsetStrategy": "onethird"},
-            make=lambda p: RandomForestRegressor(
-                **tree,
-                subsamplingRate=0.8,
-                featureSubsetStrategy="onethird",
-                **p,
+            key=FM,
+            name="FMRegressor",
+            # Learning-rate sweep: too small learns slowly, too large
+            # diverges. AdamW has no per-iteration history in Spark, so
+            # this sweep is the training-process view of the FM.
+            fixed={"factorSize": 8, "maxIter": FM_MAX_ITER, "solver": "adamW"},
+            make=lambda p: FMRegressor(
+                **common,
+                seed=ML_SEED,
+                **{"factorSize": 8, "maxIter": FM_MAX_ITER, **p},
             ),
-            grid=_forest_grid(),
+            grid=[{"stepSize": s} for s in (0.001, 0.01, 0.1)],
         ),
         ModelSpec(
             key=GBT,
             name="GBTRegressor",
-            fixed={"maxIter": GBT_MAX_ITER, "lossType": "squared"},
+            fixed={"maxIter": GBT_MAX_ITER, "stepSize": 0.1},
             make=lambda p: GBTRegressor(
-                **tree, lossType="squared", **{"maxIter": GBT_MAX_ITER, **p}
+                **common,
+                seed=ML_SEED,
+                stepSize=0.1,
+                lossType="squared",
+                # GBT lineage grows by one stage per iteration; checkpoint
+                # it (needs SparkContext.setCheckpointDir).
+                checkpointInterval=10,
+                **{"maxIter": GBT_MAX_ITER, **p},
             ),
-            grid=_gbt_grid(),
+            grid=[{"maxDepth": d} for d in (3, 5)],
         ),
     ]
 
 
-def classification_models(label: str, weighted: bool = True) -> list[ModelSpec]:
-    """Classifiers trained with balanced class weights (``class_weight``)."""
+def classification_models(label: str, n_features: int) -> list[ModelSpec]:
     common = {"featuresCol": FEATURES_COL, "labelCol": label}
-    if weighted:
-        common["weightCol"] = WEIGHT_COL
-    tree = {**common, **TREE_DEFAULTS}
+
+    def mlp(params: dict[str, Any]) -> Estimator:
+        params = dict(params)
+        hidden = params.pop("hidden")
+        return MultilayerPerceptronClassifier(
+            **common,
+            layers=[n_features, *hidden, 2],
+            seed=ML_SEED,
+            **{"maxIter": 100, **params},
+        )
+
     return [
         ModelSpec(
-            key=LINEAR,
+            key=LOGISTIC,
             name="LogisticRegression",
-            fixed={"maxIter": 200},
-            make=lambda p: LogisticRegression(**common, maxIter=200, **p),
-            grid=_linear_grid(),
-        ),
-        ModelSpec(
-            key=DECISION_TREE,
-            name="DecisionTreeClassifier",
-            make=lambda p: DecisionTreeClassifier(**tree, **p),
-            grid=_depth_grid(),
+            fixed={"maxIter": 100, "elasticNetParam": 0},
+            make=lambda p: LogisticRegression(
+                **common, **{"maxIter": 100, **p}
+            ),
+            grid=[{"regParam": r} for r in (0.001, 0.01, 0.1)],
         ),
         ModelSpec(
             key=RANDOM_FOREST,
             name="RandomForestClassifier",
-            fixed={"subsamplingRate": 0.8, "featureSubsetStrategy": "sqrt"},
+            fixed={"featureSubsetStrategy": "sqrt", "subsamplingRate": 0.8},
             make=lambda p: RandomForestClassifier(
-                **tree,
-                subsamplingRate=0.8,
+                **common,
+                seed=ML_SEED,
                 featureSubsetStrategy="sqrt",
+                subsamplingRate=0.8,
+                maxMemoryInMB=512,
                 **p,
             ),
-            grid=_forest_grid(),
+            grid=[
+                {"numTrees": 20, "maxDepth": 8},
+                {"numTrees": 60, "maxDepth": 8},
+                {"numTrees": 60, "maxDepth": 14},
+            ],
         ),
         ModelSpec(
-            key=GBT,
-            name="GBTClassifier",
-            fixed={"maxIter": GBT_MAX_ITER},
-            make=lambda p: GBTClassifier(
-                **tree, **{"maxIter": GBT_MAX_ITER, **p}
-            ),
-            grid=_gbt_grid(),
+            key=MLP,
+            name="MultilayerPerceptronClassifier",
+            fixed={"maxIter": 100, "solver": "l-bfgs", "activation": "sigmoid"},
+            make=mlp,
+            grid=[{"hidden": h} for h in ([16], [32, 16], [64, 32])],
         ),
     ]

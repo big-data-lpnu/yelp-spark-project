@@ -16,22 +16,24 @@ POSITIVE_LABEL = 1.0
 def regression_metrics(
     predictions: DataFrame, label_col: str, prediction_col: str = "prediction"
 ) -> dict[str, float]:
-    """RMSE, R² and MAE plus the share of predictions within ±0.5 star."""
+    """
+    RMSE, R² and MAE on the model's scale (log(1 + fans)), plus MAE and RMSE
+    after converting back to fan counts (expm1) for interpretation.
+    """
     evaluator = RegressionEvaluator(
         labelCol=label_col, predictionCol=prediction_col
     )
-    within = predictions.select(
-        F.avg(
-            (F.abs(F.col(prediction_col) - F.col(label_col)) <= 0.5).cast(
-                "double"
-            )
-        )
-    ).first()[0]
+    error = F.expm1(F.col(prediction_col)) - F.expm1(F.col(label_col))
+    row = predictions.select(
+        F.avg(F.abs(error)).alias("mae_fans"),
+        F.sqrt(F.avg(error * error)).alias("rmse_fans"),
+    ).first()
     return {
         "rmse": evaluator.evaluate(predictions, {evaluator.metricName: "rmse"}),
         "r2": evaluator.evaluate(predictions, {evaluator.metricName: "r2"}),
         "mae": evaluator.evaluate(predictions, {evaluator.metricName: "mae"}),
-        "within_half_star": float(within),
+        "mae_fans": float(row["mae_fans"]),
+        "rmse_fans": float(row["rmse_fans"]),
     }
 
 
@@ -136,14 +138,17 @@ def classification_metrics(
 
 
 def np_regression_metrics(y: np.ndarray, pred: np.ndarray) -> dict[str, float]:
+    """Same metrics as ``regression_metrics`` from log-scale arrays."""
     err = pred - y
     ss_res = float(np.sum(err**2))
     ss_tot = float(np.sum((y - y.mean()) ** 2))
+    err_fans = np.expm1(pred) - np.expm1(y)
     return {
         "rmse": float(np.sqrt(np.mean(err**2))),
         "r2": 1.0 - ss_res / ss_tot if ss_tot else 0.0,
         "mae": float(np.mean(np.abs(err))),
-        "within_half_star": float(np.mean(np.abs(err) <= 0.5)),
+        "mae_fans": float(np.mean(np.abs(err_fans))),
+        "rmse_fans": float(np.sqrt(np.mean(err_fans**2))),
     }
 
 
@@ -213,7 +218,7 @@ def best_threshold(y: np.ndarray, score: np.ndarray) -> float:
 def bootstrap(
     metric_fn,
     arrays: tuple[np.ndarray, ...],
-    n_resamples: int = 1000,
+    n_resamples: int = 300,
     seed: int = 42,
 ) -> dict[str, tuple[float, float]]:
     """
@@ -242,7 +247,7 @@ def paired_bootstrap_diff(
     pred_a: np.ndarray,
     pred_b: np.ndarray,
     higher_is_better: bool,
-    n_resamples: int = 1000,
+    n_resamples: int = 300,
     seed: int = 42,
 ) -> dict[str, float]:
     """
