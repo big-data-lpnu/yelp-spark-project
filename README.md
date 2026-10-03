@@ -16,12 +16,15 @@ The project is organized into the following directories:
   - `src/artifacts/`: Dataset download & unpacking automation scripts.
   - `src/analysis/`: Data validation and business analytics transformations.
     - `src/analysis/transformations/`: Topic-specific transformation modules (`business.py`, `engagement.py`, `review.py`, `user.py`).
+  - `src/ml/`: Machine learning stage — business-level feature table, Spark ML preprocessing pipeline, regression (`stars`) and classification (`is_closed`) models, evaluation and plots.
   - `src/preprocessing/`: ETL pipeline — data cleaning, flattening, EDA, and column lineage tracking.
   - `src/schemas/`: Dataset schema definitions for all Yelp entities.
   - `src/spark/`: Spark session factory and configuration helpers.
   - `src/utils/`: Shared utility functions.
   - `src/reports/`: Generated PDF reports and presentation.
-  - `src/notebooks/`: Jupyter notebooks for exploratory data analysis, preprocessing comparison, and transformation walkthroughs.
+    - `src/reports/ml/`: Machine learning stage report (Ukrainian), figures and metric tables.
+  - `src/notebooks/`: Jupyter notebooks for exploratory data analysis, preprocessing comparison, transformation walkthroughs and the ML stage (`ml_models.ipynb`).
+- `tests/`: Unit tests (`uv run pytest`).
 
 ## Project Members
 
@@ -57,7 +60,7 @@ The project is organized into the following directories:
 
 - Python 3.14 or higher
 - Apache Spark (via [PySpark](https://pypi.org/project/pyspark/) ≥ 4.1.1)
-- Java 17 (see [Java Installation](#java-installation) below)
+- Java 17 or newer (see [Java Installation](#java-installation) below)
 - [uv](https://docs.astral.sh/uv/) — fast Python package and project manager
 - Key Python dependencies (managed by `uv`):
   - `pyspark` — distributed data processing
@@ -126,6 +129,20 @@ Local execution:
 
 ```bash
 uv run -m src.main
+```
+
+Machine learning stage (regression + classification, ~37 min on 8 cores; writes figures and tables to `src/reports/ml/`):
+
+```bash
+SPARK_MAX_CORES=8 uv run -m src.ml.run          # add --quick for a ~6 min smoke run
+```
+
+The same steps with inline output are in `src/notebooks/ml_models.ipynb`; the write-up is in [`src/reports/ml/README.md`](src/reports/ml/README.md).
+
+Unit tests:
+
+```bash
+uv run pytest
 ```
 
 Via Docker:

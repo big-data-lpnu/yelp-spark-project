@@ -1,0 +1,21 @@
+feature,group,importance
+avg_review_cool,reviews,0.10251688872514042
+avg_review_length,reviews,0.101264665209093
+weekly_open_hours,hours,0.07518026716141987
+avg_review_funny,reviews,0.05820776145271786
+avg_review_useful,reviews,0.05581588222241954
+n_open_days,hours,0.041577456757457804
+log_n_checkins,tips_checkins_photos,0.032317399995625766
+category=fast food,categories,0.027055731431717883
+n_attributes,attributes,0.02285386135157811
+business_age_days,reviews,0.021318823402656558
+attr_ByAppointmentOnly,attributes,0.021229601637658854
+attr_RestaurantsDelivery,attributes,0.01713317909502216
+category=active life,categories,0.015975482013173704
+parking_street,attributes,0.01596248292389323
+category=pets,categories,0.015328403103887745
+category=real estate,categories,0.015255784976372352
+attr_WheelchairAccessible,attributes,0.014623983387448362
+n_categories,categories,0.013942167040071405
+days_since_last_tip,recency,0.013736410227780424
+days_since_last_review,recency,0.013271008344914095
